@@ -1,0 +1,114 @@
+package co.rsk.peg.federation;
+
+import co.rsk.bitcoinj.core.BtcECKey;
+import co.rsk.bitcoinj.core.NetworkParameters;
+import co.rsk.peg.bitcoin.BitcoinTestUtils;
+import co.rsk.peg.federation.constants.FederationConstants;
+import co.rsk.peg.federation.constants.FederationMainNetConstants;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.IntStream;
+
+/** Ported from RSKj's test builders. RSK and MST keys are BtcECKey here, as in the ported FederationMember. */
+public class P2shErpFederationBuilder {
+    private List<BtcECKey> membersBtcPublicKeys;
+    private List<BtcECKey> membersRskPublicKeys;
+    private List<BtcECKey> membersMstPublicKeys;
+    private List<BtcECKey> erpPublicKeys;
+    private long erpActivationDelay;
+    private Instant creationTime;
+    private long creationBlockNumber;
+    private NetworkParameters networkParameters;
+
+    private P2shErpFederationBuilder() {
+        this.membersBtcPublicKeys = BitcoinTestUtils.getBtcEcKeysFromSeeds(new String[]{
+            "member01",
+            "member02",
+            "member03",
+            "member04",
+            "member05",
+            "member06",
+            "member07",
+            "member08",
+            "member09"
+        }, true);
+        this.membersRskPublicKeys = new ArrayList<>();
+        this.membersMstPublicKeys = new ArrayList<>();
+        FederationConstants federationMainnetConstants = FederationMainNetConstants.getInstance();
+        this.erpPublicKeys = federationMainnetConstants.getErpFedPubKeysList();
+        this.erpActivationDelay = federationMainnetConstants.getErpFedActivationDelay();
+        this.creationTime = Instant.ofEpochSecond(100_000_000L);
+        this.creationBlockNumber = 1L;
+        this.networkParameters = NetworkParameters.fromID(NetworkParameters.ID_MAINNET);
+    }
+
+    public static P2shErpFederationBuilder builder() {
+        return new P2shErpFederationBuilder();
+    }
+
+    public P2shErpFederationBuilder withMembersBtcPublicKeys(List<BtcECKey> btcPublicKeys) {
+        this.membersBtcPublicKeys = btcPublicKeys;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withMembersRskPublicKeys(List<BtcECKey> rskPublicKeys) {
+        this.membersRskPublicKeys = rskPublicKeys;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withMembersMstPublicKeys(List<BtcECKey> mstPublicKeys) {
+        this.membersMstPublicKeys = mstPublicKeys;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withErpPublicKeys(List<BtcECKey> erpPublicKeys) {
+        this.erpPublicKeys = erpPublicKeys;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withErpActivationDelay(long erpActivationDelay) {
+        this.erpActivationDelay = erpActivationDelay;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withCreationTime(Instant creationTime) {
+        this.creationTime = creationTime;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withCreationBlockNumber(long creationBlockNumber) {
+        this.creationBlockNumber = creationBlockNumber;
+        return this;
+    }
+
+    public P2shErpFederationBuilder withNetworkParameters(NetworkParameters networkParameters) {
+        this.networkParameters = networkParameters;
+        return this;
+    }
+
+    public ErpFederation build() {
+        List<FederationMember> federationMembers = getFederationMembers();
+        FederationArgs federationArgs = new FederationArgs(federationMembers, creationTime, creationBlockNumber, networkParameters);
+        return FederationFactory.buildP2shErpFederation(federationArgs, erpPublicKeys, erpActivationDelay);
+    }
+
+    private List<FederationMember> getFederationMembers() {
+        if (membersRskPublicKeys.isEmpty()) {
+            this.membersRskPublicKeys = membersBtcPublicKeys.stream()
+                .map(BtcECKey::getPubKey)
+                .map(BtcECKey::fromPublicOnly)
+                .toList();
+        }
+        if (membersMstPublicKeys.isEmpty()) {
+            this.membersMstPublicKeys = new ArrayList<>(membersRskPublicKeys);
+        }
+        return IntStream.range(0, membersBtcPublicKeys.size())
+            .mapToObj(i -> new FederationMember(
+                membersBtcPublicKeys.get(i),
+                membersRskPublicKeys.get(i),
+                membersMstPublicKeys.get(i)))
+            .toList();
+    }
+}
