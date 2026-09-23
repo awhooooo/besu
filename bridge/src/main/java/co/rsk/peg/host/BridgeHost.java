@@ -8,6 +8,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 /**
  * Everything the bridge needs from the node that executes it.
@@ -48,6 +49,12 @@ public interface BridgeHost {
 
     /** Stores the value under the logical key. A null or empty value removes the entry. */
     void putStorage(Bytes32 key, byte[] value);
+
+    /** A raw 32-byte storage slot of the bridge account, zero when unset. Record layouts address slots directly. */
+    UInt256 getSlot(UInt256 slot);
+
+    /** Writes a raw slot. An unchanged value must not be written, so untouched slots never enter a block's changes. */
+    void putSlot(UInt256 slot, UInt256 value);
 
     Wei balanceOf(Address account);
 

@@ -14,6 +14,7 @@ import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 /**
  * The bridge's view of a Besu message frame.
@@ -116,6 +117,19 @@ public final class FrameBridgeHost implements BridgeHost {
     @Override
     public void putStorage(Bytes32 key, byte[] value) {
         new ChunkedStorage(bridgeAccount()).put(key, value);
+    }
+
+    @Override
+    public UInt256 getSlot(UInt256 slot) {
+        return bridgeAccount().getStorageValue(slot);
+    }
+
+    @Override
+    public void putSlot(UInt256 slot, UInt256 value) {
+        MutableAccount account = bridgeAccount();
+        if (!account.getStorageValue(slot).equals(value)) {
+            account.setStorageValue(slot, value);
+        }
     }
 
     @Override
