@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import co.rsk.peg.BridgeAddresses;
@@ -18,6 +20,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.MessageFrameTestFixture;
+import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -27,6 +30,7 @@ import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 class FrameBridgeHostTest {
 
@@ -79,6 +83,30 @@ class FrameBridgeHostTest {
         Log log = new Log(BridgeAddresses.BRIDGE, Bytes.of(1, 2, 3), List.of(LogTopic.wrap(Bytes32.ZERO)));
         host.emitLog(log);
         assertEquals(List.of(log), frame.getLogs());
+
+        UInt256 slot = UInt256.valueOf(77);
+        assertEquals(UInt256.ZERO, host.getSlot(slot));
+        host.putSlot(slot, UInt256.valueOf(5));
+        assertEquals(UInt256.valueOf(5), host.getSlot(slot));
+        assertEquals(UInt256.valueOf(5), updater.get(BridgeAddresses.BRIDGE).getStorageValue(slot));
+        host.putSlot(slot, UInt256.ZERO);
+        assertEquals(UInt256.ZERO, host.getSlot(slot));
+    }
+
+    @Test
+    void unchangedSlotValuesAreNotWritten() {
+        MessageFrame frame = mock(MessageFrame.class);
+        WorldUpdater updater = mock(WorldUpdater.class);
+        MutableAccount account = mock(MutableAccount.class);
+        when(frame.getWorldUpdater()).thenReturn(updater);
+        when(updater.getOrCreate(BridgeAddresses.BRIDGE)).thenReturn(account);
+        when(account.getStorageValue(UInt256.ONE)).thenReturn(UInt256.valueOf(9));
+
+        new FrameBridgeHost(frame).putSlot(UInt256.ONE, UInt256.valueOf(9));
+        verify(account, never()).setStorageValue(UInt256.ONE, UInt256.valueOf(9));
+
+        new FrameBridgeHost(frame).putSlot(UInt256.ONE, UInt256.valueOf(10));
+        verify(account).setStorageValue(UInt256.ONE, UInt256.valueOf(10));
     }
 
     @Test

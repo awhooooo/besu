@@ -1,7 +1,11 @@
 package co.rsk.peg;
 
+import co.rsk.bitcoinj.core.BtcECKey;
 import co.rsk.bitcoinj.core.Sha256Hash;
 import org.hyperledger.besu.datatypes.Hash;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes32;
 
@@ -27,5 +31,13 @@ public final class PegTestUtils {
         bytes[2] = (byte) (0xFF & nHash >> 16);
         bytes[3] = (byte) (0xFF & nHash >> 24);
         return Sha256Hash.wrap(bytes);
+    }
+
+    public static List<BtcECKey> createRandomBtcECKeys(int keysCount) {
+        List<BtcECKey> keys = new ArrayList<>();
+        for (int i = 0; i < keysCount; i++) {
+            keys.add(new BtcECKey());
+        }
+        return keys;
     }
 }

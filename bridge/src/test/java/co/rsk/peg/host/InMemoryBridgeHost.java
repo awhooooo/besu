@@ -13,11 +13,15 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 /** A host backed by maps, for tests. Every context field is settable; defaults are a plain external call. */
 public final class InMemoryBridgeHost implements BridgeHost {
 
     private final Map<Bytes32, byte[]> storage = new HashMap<>();
+    private final Map<UInt256, UInt256> slots = new HashMap<>();
+    private long slotReads;
+    private long slotWrites;
     private final Map<Address, Wei> balances = new HashMap<>();
     private final List<Log> logs = new ArrayList<>();
 
@@ -46,6 +50,12 @@ public final class InMemoryBridgeHost implements BridgeHost {
 
     public List<Log> logs() { return Collections.unmodifiableList(logs); }
     public int storedEntries() { return storage.size(); }
+    /** Non-zero raw slots. */
+    public Map<UInt256, UInt256> slots() { return Collections.unmodifiableMap(slots); }
+    public long slotReads() { return slotReads; }
+    /** Raw slot writes that changed a value. */
+    public long slotWrites() { return slotWrites; }
+    public void resetSlotCounters() { slotReads = 0; slotWrites = 0; }
 
     @Override public long blockNumber() { return blockNumber; }
     @Override public long blockTimestamp() { return blockTimestamp; }
@@ -70,6 +80,25 @@ public final class InMemoryBridgeHost implements BridgeHost {
             storage.remove(key);
         } else {
             storage.put(key, value.clone());
+        }
+    }
+
+    @Override
+    public UInt256 getSlot(UInt256 slot) {
+        slotReads++;
+        return slots.getOrDefault(slot, UInt256.ZERO);
+    }
+
+    @Override
+    public void putSlot(UInt256 slot, UInt256 value) {
+        if (getSlot(slot).equals(value)) {
+            return;
+        }
+        slotWrites++;
+        if (value.isZero()) {
+            slots.remove(slot);
+        } else {
+            slots.put(slot, value);
         }
     }
 

@@ -8,8 +8,8 @@ import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The RLP primitives RSKj's tests used to build inputs and expectations, on Besu's encoder. Byte-level agreement
- * between the two encoders is established by SerializationFixturesTest, which compares against recorded RSKj
- * output; these helpers only build test data.
+ * between the two encoders is pinned by the RSKj bytes recorded in BridgeSerializationUtilsTest; these helpers
+ * only build test data.
  */
 final class RlpTestUtils {
 

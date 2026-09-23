@@ -2,11 +2,15 @@ package co.rsk.peg.bitcoin;
 
 import co.rsk.bitcoinj.core.Address;
 import co.rsk.bitcoinj.core.BtcECKey;
+import co.rsk.bitcoinj.core.Coin;
 import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.bitcoinj.core.Sha256Hash;
+import co.rsk.bitcoinj.core.UTXO;
+import co.rsk.bitcoinj.script.ScriptBuilder;
 import org.hyperledger.besu.datatypes.Hash;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -46,5 +50,24 @@ public final class BitcoinTestUtils {
         bytes[2] = (byte) (0xFF & nHash >> 16);
         bytes[3] = (byte) (0xFF & nHash >> 24);
         return Sha256Hash.wrap(bytes);
+    }
+
+    public static UTXO createUTXO(int nHash, long index, Coin value, Address address) {
+        return new UTXO(
+            createHash(nHash),
+            index,
+            value,
+            10,
+            false,
+            ScriptBuilder.createOutputScript(address));
+    }
+
+    public static List<UTXO> createUTXOs(int amount, Address address) {
+        List<UTXO> utxos = new ArrayList<>();
+        for (int i = 0; i < amount; i++) {
+            utxos.add(createUTXO(i + 1, 0, Coin.FIFTY_COINS.multiply(10), address));
+        }
+
+        return utxos;
     }
 }

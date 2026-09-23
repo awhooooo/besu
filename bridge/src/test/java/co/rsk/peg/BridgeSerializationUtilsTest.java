@@ -54,26 +54,18 @@ import co.rsk.peg.federation.Federation;
 import co.rsk.peg.federation.FederationArgs;
 import co.rsk.peg.federation.FederationFactory;
 import co.rsk.peg.federation.FederationMember;
-import co.rsk.peg.federation.FederationTestUtils;
 import co.rsk.peg.federation.P2shErpFederationBuilder;
 import co.rsk.peg.federation.PendingFederation;
 import co.rsk.peg.federation.P2shP2wshErpFederationBuilder;
 import co.rsk.peg.federation.StandardMultiSigFederationBuilder;
 import co.rsk.peg.federation.constants.FederationConstants;
-import co.rsk.peg.flyover.FlyoverFederationInformation;
 import co.rsk.peg.utils.HashOrdering;
 import co.rsk.peg.utils.MerkleTreeUtils;
 import co.rsk.peg.vote.ABICallElection;
 import co.rsk.peg.vote.ABICallSpec;
 import co.rsk.peg.vote.AddressBasedAuthorizer;
-import co.rsk.peg.whitelist.LockWhitelist;
-import co.rsk.peg.whitelist.LockWhitelistEntry;
-import co.rsk.peg.whitelist.OneOffWhiteListEntry;
 import com.google.common.collect.Lists;
-import com.google.common.primitives.UnsignedBytes;
-import org.apache.commons.lang3.tuple.Pair;
 import org.bouncycastle.util.encoders.Hex;
-import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
@@ -100,8 +92,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -109,8 +99,9 @@ import org.apache.tuweni.bytes.Bytes;
 /**
  * Ported from RSKj's BridgeSerializationUtilsTest. Differences from the original: RSK addresses and hashes are
  * Besu types, RSK-side keys are BtcECKey, hex expectations go through Bouncy Castle's Hex, RSKj's RLP helper
- * calls go through {@link RlpTestUtils}, and the three non-standard ERP federation cases that depend on
- * pre-RSKIP284 or pre-RSKIP293 activations are not ported, since every rule is active from genesis here.
+ * calls go through {@link RlpTestUtils}, the three non-standard ERP federation cases for the redeem script
+ * builders that predate an activation are not ported, and the versionless federation format has no tests since
+ * it is never read or written here.
  */
 class BridgeSerializationUtilsTest {
 
@@ -122,8 +113,6 @@ class BridgeSerializationUtilsTest {
 
     private static final Address ADDRESS = BitcoinTestUtils.createP2PKHAddress(MAINNET_PARAMETERS, "first");
     private static final Address OTHER_ADDRESS = BitcoinTestUtils.createP2PKHAddress(MAINNET_PARAMETERS, "second");
-
-    private static final ActivationConfig.ForBlock ALL_ACTIVE = ActivationConfig.ALL_ACTIVE.forBlock(0L);
 
     @Test
     void serializeAndDeserializeBtcTransaction_withValidDataAndInputs_shouldReturnEqualResults() {
@@ -441,112 +430,6 @@ class BridgeSerializationUtilsTest {
         assertTrue(thrown);
     }
 
-    @Test
-    void serializeFederationOnlyBtcKeys() {
-        byte[][] publicKeyBytes = new byte[][]{
-            BtcECKey.fromPrivate(BigInteger.valueOf(100)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(200)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(300)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(400)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(500)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(600)).getPubKey(),
-        };
-
-        // Only actual keys serialized are BTC keys, so we don't really care about RSK or MST keys
-        List<FederationMember> members = FederationTestUtils.getFederationMembersWithBtcKeys(Arrays.asList(
-            BtcECKey.fromPublicOnly(publicKeyBytes[0]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[1]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[2]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[3]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[4]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[5])
-        ));
-        Instant creationTime = Instant.ofEpochMilli(0xabcdef);
-        long creationBlockNumber = 42L;
-
-        FederationArgs federationArgs = new FederationArgs(
-            members,
-            creationTime,
-            creationBlockNumber,
-            TESTNET_PARAMETERS
-        );
-        Federation standardMultisigFederation = FederationFactory.buildStandardMultiSigFederation(federationArgs);
-
-        byte[] result = BridgeSerializationUtils.serializeFederationOnlyBtcKeys(standardMultisigFederation);
-        StringBuilder expectedBuilder = new StringBuilder();
-        expectedBuilder.append("f8d3"); // Outer list
-        expectedBuilder.append("83abcdef"); // Creation time
-        expectedBuilder.append("2a"); // Creation block number
-        expectedBuilder.append("f8cc"); // Inner list
-
-        standardMultisigFederation.getBtcPublicKeys().stream().sorted(BtcECKey.PUBKEY_COMPARATOR).forEach(key -> {
-            expectedBuilder.append("a1");
-            expectedBuilder.append(Hex.toHexString(key.getPubKey()));
-        });
-
-        String expected = expectedBuilder.toString();
-
-        assertEquals(expected, Hex.toHexString(result));
-    }
-
-    @Test
-    void deserializeFederationOnlyBtcKeys_ok() {
-        byte[][] publicKeyBytes = Stream.of(100, 200, 300, 400, 500, 600)
-            .map(k -> BtcECKey.fromPrivate(BigInteger.valueOf(k)))
-            .sorted(BtcECKey.PUBKEY_COMPARATOR)
-            .map(BtcECKey::getPubKey)
-            .toArray(byte[][]::new);
-
-        byte[][] rlpKeys = new byte[publicKeyBytes.length][];
-
-        for (int k = 0; k < publicKeyBytes.length; k++) {
-            rlpKeys[k] = RlpTestUtils.encodeElement(publicKeyBytes[k]);
-        }
-
-        byte[] rlpFirstElement = RlpTestUtils.encodeElement(Hex.decode("1388")); // First element (creation date -> 5000 milliseconds from epoch)
-        byte[] rlpSecondElement = RlpTestUtils.encodeElement(Hex.decode("002a")); // Second element block number 42
-        byte[] rlpKeyList = RlpTestUtils.encodeList(rlpKeys);
-
-        byte[] data = RlpTestUtils.encodeList(rlpFirstElement, rlpSecondElement, rlpKeyList);
-
-        Federation deserializedFederation = BridgeSerializationUtils.deserializeStandardMultisigFederationOnlyBtcKeys(data, TESTNET_PARAMETERS);
-
-        assertEquals(5000, deserializedFederation.getCreationTime().toEpochMilli());
-        assertEquals(4, deserializedFederation.getNumberOfSignaturesRequired());
-        assertEquals(6, deserializedFederation.getBtcPublicKeys().size());
-        assertEquals(42L, deserializedFederation.getCreationBlockNumber());
-
-        for (int i = 0; i < 6; i++) {
-            assertArrayEquals(
-                publicKeyBytes[i],
-                deserializedFederation.getBtcPublicKeys().get(i).getPubKey()
-            );
-        }
-
-        assertEquals(TESTNET_PARAMETERS, deserializedFederation.getBtcParams());
-    }
-
-    @Test
-    void deserializeFederationOnlyBtcKeys_wrongListSize() {
-        byte[] rlpFirstElement = RlpTestUtils.encodeElement(Hex.decode("1388")); // First element (creation date -> 5000 milliseconds from epoch)
-        byte[] rlpSecondElement = RlpTestUtils.encodeElement(Hex.decode("03")); // Second element (# of signatures required - 3)
-        byte[] rlpThirdElement = RlpTestUtils.encodeElement(Hex.decode("03"));
-        byte[] rlpFourthElement = RlpTestUtils.encodeElement(Hex.decode("aabbccdd"));
-
-        byte[] data = RlpTestUtils.encodeList(rlpFirstElement, rlpSecondElement, rlpThirdElement, rlpFourthElement);
-
-        boolean thrown = false;
-
-        try {
-            BridgeSerializationUtils.deserializeStandardMultisigFederationOnlyBtcKeys(data, TESTNET_PARAMETERS);
-        } catch (Exception e) {
-            assertTrue(e.getMessage().contains("Expected 3 elements"));
-            thrown = true;
-        }
-
-        assertTrue(thrown);
-    }
-
     @Nested
     @TestInstance(TestInstance.Lifecycle.PER_CLASS)
     @Tag("serialize and deserialize federations")
@@ -570,11 +453,11 @@ class BridgeSerializationUtilsTest {
             assertEquals(STANDARD_MULTISIG_FEDERATION, deserializedFederation);
         }
 
-        // RSKj also covers the pre-RSKIP284 and pre-RSKIP293 non-standard ERP variants. Every rule is active
-        // from genesis on this chain, so only the post-RSKIP293 cases are ported.
+        // RSKj also covers the non-standard ERP variants built with the redeem script builders that predate an
+        // activation; only the current builder exists here.
 
         @Test
-        void serializeAndDeserializeNonStandardErpFederation_postRSKIP293_testnet() {
+        void serializeAndDeserializeNonStandardErpFederation_testnet() {
             // arrange
             List<BtcECKey> erpFedPubKeys = FEDERATION_TESTNET_CONSTANTS.getErpFedPubKeysList();
             long activationDelay = FEDERATION_TESTNET_CONSTANTS.getErpFedActivationDelay();
@@ -585,45 +468,41 @@ class BridgeSerializationUtilsTest {
                 TESTNET_PARAMETERS
             );
 
-            Federation nonStandardErpFederationPostRSKIP293 = FederationFactory.buildNonStandardErpFederation(
+            Federation nonStandardErpFederation = FederationFactory.buildNonStandardErpFederation(
                 testnetArgs,
                 erpFedPubKeys,
-                activationDelay,
-                ALL_ACTIVE
+                activationDelay
             );
 
             // act
-            byte[] serializedFederation = BridgeSerializationUtils.serializeFederation(nonStandardErpFederationPostRSKIP293);
+            byte[] serializedFederation = BridgeSerializationUtils.serializeFederation(nonStandardErpFederation);
             Federation deserializedFederation = BridgeSerializationUtils.deserializeNonStandardErpFederation(
                 serializedFederation,
-                FEDERATION_TESTNET_CONSTANTS,
-                ALL_ACTIVE
+                FEDERATION_TESTNET_CONSTANTS
             );
 
             // assert
-            assertEquals(nonStandardErpFederationPostRSKIP293, deserializedFederation);
+            assertEquals(nonStandardErpFederation, deserializedFederation);
         }
 
         @Test
-        void serializeAndDeserializeNonStandardErpFederation_postRSKIP293_mainnet() {
+        void serializeAndDeserializeNonStandardErpFederation_mainnet() {
             // arrange
-            Federation nonStandardErpFederationPostRSKIP293 = FederationFactory.buildNonStandardErpFederation(
+            Federation nonStandardErpFederation = FederationFactory.buildNonStandardErpFederation(
                 FEDERATION_ARGS_MAINNET,
                 ERP_FED_PUB_KEYS_MAINNET,
-                ACTIVATION_DELAY_MAINNET,
-                ALL_ACTIVE
+                ACTIVATION_DELAY_MAINNET
             );
 
             // act
-            byte[] serializedFederation = BridgeSerializationUtils.serializeFederation(nonStandardErpFederationPostRSKIP293);
+            byte[] serializedFederation = BridgeSerializationUtils.serializeFederation(nonStandardErpFederation);
             Federation deserializedFederation = BridgeSerializationUtils.deserializeNonStandardErpFederation(
                 serializedFederation,
-                FEDERATION_MAINNET_CONSTANTS,
-                ALL_ACTIVE
+                FEDERATION_MAINNET_CONSTANTS
             );
 
             // assert
-            assertEquals(nonStandardErpFederationPostRSKIP293, deserializedFederation);
+            assertEquals(nonStandardErpFederation, deserializedFederation);
         }
 
         @Test
@@ -905,150 +784,6 @@ class BridgeSerializationUtilsTest {
         }
 
         fail();
-    }
-
-    @Test
-    void serializeLockWhitelist() {
-        byte[][] addressesBytes = new byte[][]{
-            BtcECKey.fromPrivate(BigInteger.valueOf(100)).getPubKeyHash(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(200)).getPubKeyHash(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(300)).getPubKeyHash(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(400)).getPubKeyHash(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(500)).getPubKeyHash(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(600)).getPubKeyHash(),
-        };
-        Coin maxToTransfer = Coin.CENT;
-
-        LockWhitelist lockWhitelist = new LockWhitelist(
-            Arrays.stream(addressesBytes)
-                .map(bytes -> new Address(TESTNET_PARAMETERS, bytes))
-                .collect(Collectors.toMap(Function.identity(), k -> new OneOffWhiteListEntry(k, maxToTransfer))),
-            0);
-
-        byte[] result = BridgeSerializationUtils.serializeOneOffLockWhitelist(Pair.of(
-            lockWhitelist.getAll(OneOffWhiteListEntry.class),
-            lockWhitelist.getDisableBlockHeight()
-        ));
-        StringBuilder expectedBuilder = new StringBuilder();
-        expectedBuilder.append("f897");
-        Arrays.stream(addressesBytes).sorted(UnsignedBytes.lexicographicalComparator()).forEach(bytes -> {
-            expectedBuilder.append("94");
-            expectedBuilder.append(Hex.toHexString(bytes));
-            expectedBuilder.append("83");
-            expectedBuilder.append(Hex.toHexString(BigInteger.valueOf(maxToTransfer.value).toByteArray()));
-        });
-        expectedBuilder.append("80");
-        String expected = expectedBuilder.toString();
-        assertEquals(expected, Hex.toHexString(result));
-    }
-
-    @Test
-    void deserializeOneOffLockWhitelistAndDisableBlockHeight() {
-        byte[][] addressesBytes = Stream.of(100, 200, 300, 400)
-            .map(k -> BtcECKey.fromPrivate(BigInteger.valueOf(k)))
-            .sorted(BtcECKey.PUBKEY_COMPARATOR)
-            .map(BtcECKey::getPubKeyHash)
-            .toArray(byte[][]::new);
-
-        byte[][] rlpBytes = new byte[9][0];
-
-        for (int k = 0; k < addressesBytes.length; k++) {
-            rlpBytes[k * 2] = RlpTestUtils.encodeElement(addressesBytes[k]);
-            rlpBytes[k * 2 + 1] = RlpTestUtils.encodeElement(Hex.decode("0186a0")); // Coin.MILLICOIN
-        }
-
-        rlpBytes[8] = RlpTestUtils.encodeElement(Hex.decode("002a"));
-
-        byte[] data = RlpTestUtils.encodeList(rlpBytes);
-
-        Pair<HashMap<Address, OneOffWhiteListEntry>, Integer> deserializedLockWhitelist = BridgeSerializationUtils.deserializeOneOffLockWhitelistAndDisableBlockHeight(
-            data,
-            TESTNET_PARAMETERS
-        );
-
-        assertEquals(addressesBytes.length, deserializedLockWhitelist.getLeft().size());
-        Set<Bytes> expectedHashes = Arrays.stream(addressesBytes).map(Bytes::wrap).collect(Collectors.toSet());
-        Set<Bytes> deserializedHashes = deserializedLockWhitelist.getLeft().keySet().stream().map(a -> Bytes.wrap(a.getHash160())).collect(Collectors.toSet());
-        assertEquals(expectedHashes, deserializedHashes);
-        Set<Coin> deserializedCoins = deserializedLockWhitelist.getLeft().values()
-            .stream()
-            .map(OneOffWhiteListEntry::maxTransferValue)
-            .collect(Collectors.toSet());
-        assertEquals(1, deserializedCoins.size());
-        assertTrue(deserializedCoins.contains(Coin.MILLICOIN));
-        assertEquals(42, deserializedLockWhitelist.getRight());
-    }
-
-    @Test
-    void deserializeOneOffLockWhitelistAndDisableBlockHeight_null() {
-        Pair<HashMap<Address, OneOffWhiteListEntry>, Integer> deserializedLockWhitelist = BridgeSerializationUtils.deserializeOneOffLockWhitelistAndDisableBlockHeight(
-            null,
-            TESTNET_PARAMETERS
-        );
-
-        assertNull(deserializedLockWhitelist);
-
-        Pair<HashMap<Address, OneOffWhiteListEntry>, Integer> deserializedLockWhitelist2 = BridgeSerializationUtils.deserializeOneOffLockWhitelistAndDisableBlockHeight(
-            new byte[]{},
-            TESTNET_PARAMETERS
-        );
-
-        assertNull(deserializedLockWhitelist2);
-    }
-
-    @Test
-    void serializeDeserializeOneOffLockWhitelistAndDisableBlockHeight() {
-        NetworkParameters btcParams = TESTNET_PARAMETERS;
-        Map<Address, LockWhitelistEntry> whitelist = new HashMap<>();
-        Address address = BtcECKey.fromPrivate(BigInteger.valueOf(100L)).toAddress(btcParams);
-        whitelist.put(address, new OneOffWhiteListEntry(address, Coin.COIN));
-
-        LockWhitelist originalLockWhitelist = new LockWhitelist(whitelist, 0);
-        byte[] serializedLockWhitelist = BridgeSerializationUtils.serializeOneOffLockWhitelist(Pair.of(
-            originalLockWhitelist.getAll(OneOffWhiteListEntry.class),
-            originalLockWhitelist.getDisableBlockHeight()
-        ));
-        Pair<HashMap<Address, OneOffWhiteListEntry>, Integer> deserializedLockWhitelist = BridgeSerializationUtils.deserializeOneOffLockWhitelistAndDisableBlockHeight(serializedLockWhitelist, btcParams);
-
-        List<Address> originalAddresses = originalLockWhitelist.getAddresses();
-        List<Address> deserializedAddresses = new ArrayList<>(deserializedLockWhitelist.getLeft().keySet());
-        assertEquals(1, originalAddresses.size());
-        assertEquals(1, deserializedAddresses.size());
-        assertEquals(originalAddresses, deserializedAddresses);
-        assertEquals(
-            ((OneOffWhiteListEntry)originalLockWhitelist.get(originalAddresses.get(0))).maxTransferValue(),
-            (deserializedLockWhitelist.getLeft().get(deserializedAddresses.get(0))).maxTransferValue());
-    }
-
-    @Test
-    void serializeAndDeserializeFederationOnlyBtcKeysWithRealRLP() {
-        NetworkParameters networkParams = TESTNET_PARAMETERS;
-
-        byte[][] publicKeyBytes = new byte[][]{
-            BtcECKey.fromPrivate(BigInteger.valueOf(100)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(200)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(300)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(400)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(500)).getPubKey(),
-            BtcECKey.fromPrivate(BigInteger.valueOf(600)).getPubKey(),
-        };
-
-        // Only actual keys serialized are BTC keys, so deserialization will fill RSK and MST keys with those
-        List<FederationMember> members = FederationTestUtils.getFederationMembersWithKeys(Arrays.asList(
-            BtcECKey.fromPublicOnly(publicKeyBytes[0]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[1]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[2]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[3]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[4]),
-            BtcECKey.fromPublicOnly(publicKeyBytes[5])
-        ));
-        FederationArgs federationArgs = new FederationArgs(members, Instant.ofEpochMilli(0xabcdef), 42L,
-            networkParams);
-        Federation standardMultisigFederation = FederationFactory.buildStandardMultiSigFederation(federationArgs);
-
-        byte[] result = BridgeSerializationUtils.serializeFederationOnlyBtcKeys(standardMultisigFederation);
-        Federation deserializedFederation = BridgeSerializationUtils.deserializeStandardMultisigFederationOnlyBtcKeys(result, networkParams);
-        assertEquals(standardMultisigFederation, deserializedFederation);
     }
 
     @Test
@@ -1344,89 +1079,6 @@ class BridgeSerializationUtilsTest {
         assertEquals(expectedScript, actualScript);
     }
 
-    @Test
-    void deserializeFlyoverFederationInformation_no_data() {
-        FlyoverFederationInformation result = BridgeSerializationUtils.deserializeFlyoverFederationInformation(
-            new byte[]{},
-            new byte[]{}
-        );
-
-        assertNull(result);
-    }
-
-    @Test
-    void deserializeFlyoverFederationInformation_null_data() {
-        FlyoverFederationInformation result = BridgeSerializationUtils.deserializeFlyoverFederationInformation(
-            null,
-            null
-        );
-
-        assertNull(result);
-    }
-
-    @Test
-    void deserializeFlyoverFederationInformation_one_data() {
-        byte[][] rlpElements = new byte[1][];
-        rlpElements[0] = RlpTestUtils.encodeElement(new byte[]{(byte)0x11});
-
-        byte[] data = RlpTestUtils.encodeList(rlpElements);
-        assertThrows(RuntimeException.class, () -> BridgeSerializationUtils.deserializeFlyoverFederationInformation(
-            data,
-            new byte[]{(byte)0x23}
-        ));
-    }
-
-    @Test
-    void deserializeFlyoverFederationInformation_ok() {
-        byte[][] rlpElements = new byte[2][];
-        rlpElements[0] = RlpTestUtils.encodeElement(Sha256Hash.wrap("0000000000000000000000000000000000000000000000000000000000000002").getBytes());
-        rlpElements[1] = RlpTestUtils.encodeElement(new byte[]{(byte)0x22});
-
-        FlyoverFederationInformation result = BridgeSerializationUtils.deserializeFlyoverFederationInformation(
-            RlpTestUtils.encodeList(rlpElements),
-            new byte[]{(byte)0x23}
-        );
-
-        assertNotNull(result);
-        assertArrayEquals(
-            Sha256Hash.wrap("0000000000000000000000000000000000000000000000000000000000000002").getBytes(),
-            result.getDerivationHash().getBytes().toArrayUnsafe()
-        );
-        assertArrayEquals(new byte[]{(byte)0x22}, result.getFederationRedeemScriptHash());
-        assertArrayEquals(new byte[]{(byte)0x23}, result.getFlyoverFederationRedeemScriptHash());
-    }
-
-    @Test
-    void serializeFlyoverFederationInformation_no_data() {
-        byte[] result = BridgeSerializationUtils.serializeFlyoverFederationInformation(null);
-
-        assertEquals(0, result.length);
-    }
-
-    @Test
-    void serializeFlyoverFederationInformation_Ok() {
-        byte[] flyoverFederationRedeemScriptHash = new byte[]{(byte)0x23};
-        FlyoverFederationInformation flyoverFederationInformation = new FlyoverFederationInformation(
-            PegTestUtils.createHash3(2),
-            new byte[]{(byte)0x22},
-            flyoverFederationRedeemScriptHash
-        );
-
-        FlyoverFederationInformation result = BridgeSerializationUtils.deserializeFlyoverFederationInformation(
-            BridgeSerializationUtils.serializeFlyoverFederationInformation(flyoverFederationInformation),
-            flyoverFederationRedeemScriptHash
-        );
-
-        assertEquals(flyoverFederationInformation.getDerivationHash(), result.getDerivationHash());
-        assertArrayEquals(
-            flyoverFederationInformation.getFederationRedeemScriptHash(),
-            result.getFederationRedeemScriptHash()
-        );
-        assertArrayEquals(
-            flyoverFederationInformation.getFlyoverFederationRedeemScriptHash(),
-            result.getFlyoverFederationRedeemScriptHash()
-        );
-    }
 
     @Test
     void deserializeCoinbaseInformation_dataIsNull_returnsNull() {
@@ -1606,7 +1258,7 @@ class BridgeSerializationUtilsTest {
                 + "1c63750541999a71f6305d255060e1e2fcf816f866a1039d1abaec9f5715a15c7628244170951e0f85e87f68ca5393d3"
                 + "f9fc3fa23a69c8a1038d3f06b158ddd609f83b0531466fc2a3da6aa80b433a92ddeeb20435cf33ddaea1021388065ddd"
                 + "7f69a011dec106b539f7e9e00b5aff075688200e33f9c1018881ed";
-            assertEquals(expected, Hex.toHexString(new PendingFederation(members(3, true)).serialize(ALL_ACTIVE)));
+            assertEquals(expected, Hex.toHexString(new PendingFederation(members(3, true)).serialize()));
         }
 
         @Test
@@ -1694,10 +1346,9 @@ class BridgeSerializationUtilsTest {
             assertEquals("a00000000000000000000000000000000000000000000000000000000000000000", Hex.toHexString(BridgeSerializationUtils.serializeSha256Hash(Sha256Hash.ZERO_HASH)));
             assertEquals("c180", Hex.toHexString(BridgeSerializationUtils.serializeScript(new Script(new byte[0]))));
             assertEquals("e1a00000000000000000000000000000000000000000000000000000000000000000", Hex.toHexString(BridgeSerializationUtils.serializeCoinbaseInformation(new CoinbaseInformation(Sha256Hash.ZERO_HASH))));
-            assertEquals("c105", Hex.toHexString(BridgeSerializationUtils.serializeOneOffLockWhitelist(Pair.of(List.of(), 5))));
             assertEquals("c1c0", Hex.toHexString(new StateForFederator(new TreeMap<>(HashOrdering.RSK)).encodeToRlp()));
             assertEquals("cb8081c081c081c081c08180", Hex.toHexString(new BridgeState(0, 0L, new ArrayList<>(), new TreeMap<>(HashOrdering.RSK),
-                new ReleaseRequestQueue(new ArrayList<>()), new PegoutsWaitingForConfirmations(new HashSet<>()), ALL_ACTIVE).getEncoded()));
+                new ReleaseRequestQueue(new ArrayList<>()), new PegoutsWaitingForConfirmations(new HashSet<>())).getEncoded()));
         }
     }
 }
