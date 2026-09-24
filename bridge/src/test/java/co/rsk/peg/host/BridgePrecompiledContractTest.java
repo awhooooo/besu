@@ -1,5 +1,6 @@
 package co.rsk.peg.host;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,12 +12,15 @@ import co.rsk.bitcoinj.core.Coin;
 import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.bitcoinj.core.Sha256Hash;
 import co.rsk.bitcoinj.core.StoredBlock;
+import co.rsk.bitcoinj.store.BlockStoreException;
 import co.rsk.peg.BridgeAddresses;
 import co.rsk.peg.BridgeEvents;
 import co.rsk.peg.BridgeMethods;
 import co.rsk.peg.BridgeStorageProvider;
 import co.rsk.peg.BridgeSupport;
+import co.rsk.peg.BtcBlockStoreWithCache;
 import co.rsk.peg.BridgeSupportFactory;
+import co.rsk.peg.ConcurrentRuns;
 import co.rsk.peg.ReleaseRequestQueue;
 import co.rsk.peg.RepositoryBtcBlockStoreWithCache;
 import co.rsk.peg.abi.AbiFunction;
@@ -57,6 +61,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -80,16 +85,15 @@ class BridgePrecompiledContractTest {
     private static final Address FEDERATOR = PublicKeys.addressOf(CONSTANTS.getFederationConstants().getGenesisFederationPublicKeys().get(0));
 
     private MutableWorldState world;
+    private RepositoryBtcBlockStoreWithCache.Factory blockStoreFactory;
     private BridgePrecompiledContract contract;
     private MessageCallProcessor processor;
 
     @BeforeEach
     void setUp() {
         world = InMemoryKeyValueStorageProvider.createInMemoryWorldState();
-        contract = new BridgePrecompiledContract(
-            CONSTANTS,
-            new BridgeSupportFactory(new RepositoryBtcBlockStoreWithCache.Factory(PARAMS), CONSTANTS)
-        );
+        blockStoreFactory = new RepositoryBtcBlockStoreWithCache.Factory(PARAMS);
+        contract = new BridgePrecompiledContract(CONSTANTS, new BridgeSupportFactory(blockStoreFactory, CONSTANTS));
         PrecompileContractRegistry registry = new PrecompileContractRegistry();
         registry.put(BridgeAddresses.BRIDGE, contract);
         processor = new MessageCallProcessor(MainnetEVMs.cancun(EvmConfiguration.DEFAULT), registry);
@@ -142,14 +146,14 @@ class BridgePrecompiledContractTest {
     }
 
     @Test
-    void pricesTheConfirmationsQueryFromTheDepthOfTheBlock() {
+    void pricesTheConfirmationsQueryFromTheDepthOfTheBlock() throws BlockStoreException {
         // Each block holds one transaction, so its merkle root is that transaction's hash
         Sha256Hash txHash = Sha256Hash.of(new byte[]{7});
         Sha256Hash headTxHash = Sha256Hash.of(new byte[]{8});
         BtcBlock genesis = PARAMS.getGenesisBlock();
         BtcBlock blockAtHeight1 = new BtcBlock(PARAMS, 1, genesis.getHash(), txHash, 1, 1, 1, new ArrayList<>());
         BtcBlock blockAtHeight2 = new BtcBlock(PARAMS, 1, blockAtHeight1.getHash(), headTxHash, 2, 1, 2, new ArrayList<>());
-        writeHeaderChain(blockAtHeight1, blockAtHeight2);
+        writeHeaderChain(world, blockAtHeight1, blockAtHeight2);
         AbiFunction function = BridgeMethods.GET_BTC_TRANSACTION_CONFIRMATIONS.getFunction();
 
         // One block below the chain head: the basic cost, one depth step, two confirmations
@@ -179,15 +183,15 @@ class BridgePrecompiledContractTest {
 
     @Test
     void releaseBtcMovesTheValueQueuesTheRequestAndLogsIt() {
-        fund(SENDER, ONE_BTC.multiply(2));
+        fund(world, SENDER, ONE_BTC.multiply(2));
 
         MessageFrame frame = new Call().value(ONE_BTC).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
 
         assertEquals(MessageFrame.State.COMPLETED_SUCCESS, frame.getState());
         assertEquals(23_000, INITIAL_GAS - frame.getRemainingGas());
         assertTrue(frame.getOutputData().isEmpty());
-        assertEquals(ONE_BTC, balance(BridgeAddresses.BRIDGE));
-        assertEquals(ONE_BTC, balance(SENDER));
+        assertEquals(ONE_BTC, balance(world, BridgeAddresses.BRIDGE));
+        assertEquals(ONE_BTC, balance(world, SENDER));
 
         co.rsk.bitcoinj.core.Address destination = SENDER_KEY.toAddress(PARAMS);
         AbiFunction event = BridgeEvents.RELEASE_REQUEST_RECEIVED.getEvent();
@@ -197,7 +201,7 @@ class BridgePrecompiledContractTest {
         assertEquals(event.encodeEventTopics(SENDER.getBytes().toUnprefixedHexString()), log.getTopics());
         assertEquals(event.encodeEventData(destination.toString(), ONE_BTC.toBigInteger()), log.getData());
 
-        List<ReleaseRequestQueue.Entry> entries = storageProvider().getReleaseRequestQueue().getEntries();
+        List<ReleaseRequestQueue.Entry> entries = storageProvider(world).getReleaseRequestQueue().getEntries();
         assertEquals(1, entries.size());
         assertEquals(destination, entries.get(0).getDestination());
         assertEquals(Coin.COIN, entries.get(0).getAmount());
@@ -206,21 +210,21 @@ class BridgePrecompiledContractTest {
 
     @Test
     void aReleaseBelowTheMinimumIsRefundedAndRejected() {
-        fund(SENDER, ONE_BTC);
+        fund(world, SENDER, ONE_BTC);
         Wei value = Weis.fromSatoshis(Coin.valueOf(1_000)); // the regtest minimum is 250 000 satoshis
 
         MessageFrame frame = new Call().value(value).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
 
         assertEquals(MessageFrame.State.COMPLETED_SUCCESS, frame.getState());
-        assertEquals(Wei.ZERO, balance(BridgeAddresses.BRIDGE));
-        assertEquals(ONE_BTC, balance(SENDER));
+        assertEquals(Wei.ZERO, balance(world, BridgeAddresses.BRIDGE));
+        assertEquals(ONE_BTC, balance(world, SENDER));
 
         AbiFunction event = BridgeEvents.RELEASE_REQUEST_REJECTED.getEvent();
         assertEquals(1, frame.getLogs().size());
         Log log = frame.getLogs().get(0);
         assertEquals(event.encodeEventTopics(SENDER.getBytes().toUnprefixedHexString()), log.getTopics());
         assertEquals(event.encodeEventData(value.toBigInteger(), RejectedPegoutReason.LOW_AMOUNT.getValue()), log.getData());
-        assertTrue(storageProvider().getReleaseRequestQueue().getEntries().isEmpty());
+        assertTrue(storageProvider(world).getReleaseRequestQueue().getEntries().isEmpty());
     }
 
     @ParameterizedTest
@@ -299,12 +303,57 @@ class BridgePrecompiledContractTest {
         assertThrows(IllegalStateException.class, withoutLocalFlag::run);
     }
 
-    private void writeHeaderChain(BtcBlock... blocks) {
-        MessageFrame frame = new Call().frame();
+    @Test
+    void oneContractServesManyThreadsAtOnce() throws Exception {
+        List<Callable<Void>> callers = new ArrayList<>();
+        for (int thread = 0; thread < 8; thread++) {
+            int seed = thread;
+            callers.add(() -> {
+                queryOwnChain(seed);
+                return null;
+            });
+        }
+        ConcurrentRuns.run(callers);
+    }
+
+    /** One thread's work: its own world state and header chain, queried and written through the shared contract. */
+    private void queryOwnChain(int seed) throws BlockStoreException {
+        MutableWorldState own = InMemoryKeyValueStorageProvider.createInMemoryWorldState();
+        int length = 6;
+        BtcBlock[] chain = new BtcBlock[length];
+        Sha256Hash[] txHashes = new Sha256Hash[length];
+        Sha256Hash previous = PARAMS.getGenesisBlock().getHash();
+        for (int height = 1; height <= length; height++) {
+            txHashes[height - 1] = Sha256Hash.of(("thread " + seed + " tx " + height).getBytes(UTF_8));
+            chain[height - 1] = new BtcBlock(PARAMS, 1, previous, txHashes[height - 1], height, 1, seed, new ArrayList<>());
+            previous = chain[height - 1].getHash();
+        }
+        writeHeaderChain(own, chain);
+        fund(own, SENDER, ONE_BTC);
+        AbiFunction function = BridgeMethods.GET_BTC_TRANSACTION_CONFIRMATIONS.getFunction();
+
+        for (int round = 0; round < 3; round++) {
+            for (int height = 1; height <= length; height++) {
+                Bytes input = function.encode(txHashes[height - 1].getBytes(), chain[height - 1].getHash().getBytes(), 0, new byte[0][]);
+                MessageFrame frame = new Call().world(own).input(input).run();
+                assertEquals(MessageFrame.State.COMPLETED_SUCCESS, frame.getState());
+                assertEquals(27_000 + 315 * (length - height) + 2 * input.size(), INITIAL_GAS - frame.getRemainingGas());
+                assertEquals(BigInteger.valueOf(length - height + 1), function.decodeResult(frame.getOutputData())[0]);
+            }
+        }
+
+        MessageFrame release = new Call().world(own).value(ONE_BTC).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
+        assertEquals(MessageFrame.State.COMPLETED_SUCCESS, release.getState());
+        assertEquals(1, release.getLogs().size());
+        assertEquals(1, storageProvider(own).getReleaseRequestQueue().getEntries().size());
+    }
+
+    private void writeHeaderChain(MutableWorldState target, BtcBlock... blocks) throws BlockStoreException {
+        MessageFrame frame = new Call().world(target).frame();
         FrameBridgeHost host = new FrameBridgeHost(frame);
         BridgeStorageProvider provider = new BridgeStorageProvider(new BridgeStorageAccessorImpl(host), PARAMS);
-        // The constructor stores the genesis block and makes it the chain head
-        RepositoryBtcBlockStoreWithCache store = new RepositoryBtcBlockStoreWithCache(PARAMS, host, new HashMap<>(), CONSTANTS, provider);
+        // The node's factory: the constructor stores the genesis block and makes it the chain head
+        BtcBlockStoreWithCache store = blockStoreFactory.newInstance(host, CONSTANTS, provider);
         StoredBlock stored = store.getChainHead();
         for (BtcBlock block : blocks) {
             stored = new StoredBlock(block, stored.getChainWork().add(BigInteger.ONE), stored.getHeight() + 1);
@@ -315,25 +364,26 @@ class BridgePrecompiledContractTest {
         frame.getWorldUpdater().commit();
     }
 
-    private void fund(Address account, Wei amount) {
-        WorldUpdater updater = world.updater();
+    private static void fund(MutableWorldState target, Address account, Wei amount) {
+        WorldUpdater updater = target.updater();
         updater.getOrCreate(account).setBalance(amount);
         updater.commit();
     }
 
-    private Wei balance(Address account) {
-        Account state = world.get(account);
+    private static Wei balance(MutableWorldState target, Address account) {
+        Account state = target.get(account);
         return state == null ? Wei.ZERO : state.getBalance();
     }
 
-    private BridgeStorageProvider storageProvider() {
-        return new BridgeStorageProvider(new BridgeStorageAccessorImpl(new FrameBridgeHost(new Call().frame())), PARAMS);
+    private BridgeStorageProvider storageProvider(MutableWorldState target) {
+        return new BridgeStorageProvider(new BridgeStorageAccessorImpl(new FrameBridgeHost(new Call().world(target).frame())), PARAMS);
     }
 
     /** One call to the bridge through Besu's message call processor, with the context the node attaches. */
     private final class Call {
         private Bytes input = Bytes.EMPTY;
         private long gas = INITIAL_GAS;
+        private MutableWorldState target = world;
         private Wei value = Wei.ZERO;
         private Address sender = SENDER;
         private boolean isStatic;
@@ -342,6 +392,11 @@ class BridgePrecompiledContractTest {
         Call() {
             context.put(FrameBridgeHost.TRANSACTION_HASH, TX_HASH);
             context.put(FrameBridgeHost.LOCAL_CALL, false);
+        }
+
+        Call world(MutableWorldState world) {
+            this.target = world;
+            return this;
         }
 
         Call input(Bytes input) {
@@ -392,7 +447,7 @@ class BridgePrecompiledContractTest {
         MessageFrame frame() {
             return MessageFrame.builder()
                 .type(MessageFrame.Type.MESSAGE_CALL)
-                .worldUpdater(world.updater())
+                .worldUpdater(target.updater())
                 .initialGas(gas)
                 .address(BridgeAddresses.BRIDGE)
                 .contract(BridgeAddresses.BRIDGE)
