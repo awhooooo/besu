@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -91,6 +92,38 @@ class FrameBridgeHostTest {
         assertEquals(UInt256.valueOf(5), updater.get(BridgeAddresses.BRIDGE).getStorageValue(slot));
         host.putSlot(slot, UInt256.ZERO);
         assertEquals(UInt256.ZERO, host.getSlot(slot));
+    }
+
+    @Test
+    void staticFramesRefuseStateChanges() {
+        MutableWorldState world = InMemoryKeyValueStorageProvider.createInMemoryWorldState();
+        WorldUpdater updater = world.updater();
+        MutableAccount bridge = updater.getOrCreate(BridgeAddresses.BRIDGE);
+        bridge.setBalance(Wei.of(1000));
+        bridge.setStorageValue(UInt256.ONE, UInt256.valueOf(5));
+        Bytes32 key = Bytes32.leftPad(Bytes.of((byte) 2));
+        byte[] value = {1, 2, 3};
+        new ChunkedStorage(bridge).put(key, value);
+        MessageFrame frame = mock(MessageFrame.class);
+        when(frame.isStatic()).thenReturn(true);
+        when(frame.getWorldUpdater()).thenReturn(updater);
+        FrameBridgeHost host = new FrameBridgeHost(frame);
+
+        // Writing what is already there is not a change
+        host.putSlot(UInt256.ONE, UInt256.valueOf(5));
+        host.putStorage(key, value);
+        host.transfer(BridgeAddresses.BRIDGE, SENDER, Wei.ZERO);
+
+        assertThrows(IllegalStateException.class, () -> host.putSlot(UInt256.ONE, UInt256.valueOf(6)));
+        assertThrows(IllegalStateException.class, () -> host.putStorage(key, new byte[]{9}));
+        assertThrows(IllegalStateException.class, () -> host.putStorage(key, null));
+        assertThrows(IllegalStateException.class, () -> host.transfer(BridgeAddresses.BRIDGE, SENDER, Wei.of(1)));
+        assertThrows(IllegalStateException.class, () -> host.emitLog(new Log(BridgeAddresses.BRIDGE, Bytes.EMPTY, List.of())));
+
+        assertEquals(UInt256.valueOf(5), bridge.getStorageValue(UInt256.ONE));
+        assertArrayEquals(value, host.getStorage(key));
+        assertEquals(Wei.of(1000), host.balanceOf(BridgeAddresses.BRIDGE));
+        verify(frame, never()).addLog(any());
     }
 
     @Test

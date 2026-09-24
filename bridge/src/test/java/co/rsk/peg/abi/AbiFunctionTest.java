@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import co.rsk.peg.Bridge;
 import co.rsk.peg.BridgeEvents;
 import co.rsk.peg.BridgeMethods;
 import org.hyperledger.besu.datatypes.Address;
@@ -337,7 +336,6 @@ class AbiFunctionTest {
 
     @Test
     void everyBridgeMethodKeepsItsRskjSelector() {
-        assertNotNull(Bridge.UPDATE_COLLECTIONS);
         for (BridgeMethods method : BridgeMethods.values()) {
             AbiFunction function = method.getFunction();
             assertEquals(RSKJ.get("function." + method.name() + ".signature"), function.formatSignature(), method.name());
