@@ -4,6 +4,7 @@ import co.rsk.bitcoinj.core.Address;
 import co.rsk.bitcoinj.core.BtcECKey;
 import co.rsk.bitcoinj.core.Coin;
 import co.rsk.bitcoinj.core.NetworkParameters;
+import co.rsk.bitcoinj.params.RegTestParams;
 import co.rsk.bitcoinj.core.Sha256Hash;
 import co.rsk.bitcoinj.core.TransactionOutput;
 import co.rsk.bitcoinj.core.UTXO;
@@ -42,6 +43,30 @@ public final class PegTestUtils {
         return new CallContext(sender, Hash.ZERO, Wei.ZERO, false, null);
     }
 
+    /** The per-call facts of a value-less call from the sender, with the given transaction hash. */
+    public static CallContext callFrom(org.hyperledger.besu.datatypes.Address sender, Hash hash) {
+        return new CallContext(sender, hash, Wei.ZERO, false, null);
+    }
+
+    /** RSKj's mocked Transaction whose only stubbed member is its hash. */
+    public static CallContext callWithHash(Hash hash) {
+        return callFrom(org.hyperledger.besu.datatypes.Address.ZERO, hash);
+    }
+
+    public static List<ReleaseRequestQueue.Entry> createReleaseRequestQueueEntries(int amount) {
+        List<ReleaseRequestQueue.Entry> entries = new ArrayList<>();
+        for (int i = 0; i < amount; i++) {
+            ReleaseRequestQueue.Entry entry = new ReleaseRequestQueue.Entry(
+                createRandomP2PKHBtcAddress(RegTestParams.get()),
+                Coin.FIFTY_COINS.multiply(10).add(Coin.valueOf(i)),
+                createHash3(i)
+            );
+            entries.add(entry);
+        }
+
+        return entries;
+    }
+
     /** A 32-byte RSK transaction hash whose first two bytes are the little-endian value. */
     public static Hash createHash3(int nHash) {
         byte[] bytes = new byte[32];
@@ -70,6 +95,16 @@ public final class PegTestUtils {
         return co.rsk.peg.utils.PublicKeys.addressOf(new BtcECKey());
     }
 
+    public static UTXO createUTXO(Coin value, Address address) {
+        return new UTXO(
+            createHash(1),
+            1,
+            value,
+            0,
+            false,
+            ScriptBuilder.createOutputScript(address));
+    }
+
     public static UTXO createUTXO(Sha256Hash btcHash, long index, Coin value) {
         return new UTXO(
             btcHash,
@@ -86,6 +121,10 @@ public final class PegTestUtils {
             Hex.decode("001437c383ea78269585c73289daa36d7b7014b65294") :
             Hex.decode("0014ef57424d0d625cf82fabe4fd7657d24a5f13dfb2");
         return new TransactionOutput(networkParameters, null, valuesToSend, scriptBytes);
+    }
+
+    public static Federation createSimpleActiveFederation(BridgeConstants bridgeConstants) {
+        return createFederation(bridgeConstants, "fa01", "fa02");
     }
 
     public static Federation createFederation(BridgeConstants bridgeConstants, String... fedKeys) {
@@ -126,6 +165,23 @@ public final class PegTestUtils {
         org.hyperledger.besu.datatypes.Address rskDestinationAddress,
         Optional<Address> btcRefundAddressOptional
     ) {
+        return createOpReturnScript("52534b54", protocolVersion, rskDestinationAddress, btcRefundAddressOptional); // 'RSKT' in hexa
+    }
+
+    public static Script createOpReturnScriptWithInvalidPrefix(
+        int protocolVersion,
+        org.hyperledger.besu.datatypes.Address rskDestinationAddress,
+        Optional<Address> btcRefundAddressOptional
+    ) {
+        return createOpReturnScript("544b5352", protocolVersion, rskDestinationAddress, btcRefundAddressOptional); // 'TKSR' in hexa
+    }
+
+    private static Script createOpReturnScript(
+        String prefixHex,
+        int protocolVersion,
+        org.hyperledger.besu.datatypes.Address rskDestinationAddress,
+        Optional<Address> btcRefundAddressOptional
+    ) {
         int index = 0;
         int payloadLength;
         if (btcRefundAddressOptional.isPresent()) {
@@ -135,7 +191,7 @@ public final class PegTestUtils {
         }
         byte[] payloadBytes = new byte[payloadLength];
 
-        byte[] prefix = Hex.decode("52534b54"); // 'RSKT' in hexa
+        byte[] prefix = Hex.decode(prefixHex);
         System.arraycopy(prefix, 0, payloadBytes, index, prefix.length);
         index += prefix.length;
 
