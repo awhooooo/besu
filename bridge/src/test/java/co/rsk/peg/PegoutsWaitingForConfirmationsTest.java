@@ -29,6 +29,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigInteger;
 import java.util.*;
+import java.util.function.Supplier;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -168,6 +169,89 @@ class PegoutsWaitingForConfirmationsTest {
         Assertions.assertTrue(set.removeEntry(result.get()));
         Assertions.assertFalse(set.removeEntry(result.get()));
         Assertions.assertEquals(set.getEntries().size(), size-1);
+    }
+
+    // ---- the lazily loaded form, and the hint that lets a call answer without reading the list
+
+    @Test
+    void theHintNeverHidesAConfirmedPegout() {
+        // The hint exists to skip reading the list. If it ever said "nothing is confirmed" when something was,
+        // that pegout would sit in the list untouched, so the answer with the hint has to be the answer without
+        // it, for every shape of list and every height. A fixed seed keeps the cases reproducible.
+        Random random = new Random(20260924L);
+
+        for (int run = 0; run < 2_000; run++) {
+            Set<PegoutsWaitingForConfirmations.Entry> entries = new HashSet<>();
+            int size = random.nextInt(6);
+            for (int i = 0; i < size; i++) {
+                entries.add(new PegoutsWaitingForConfirmations.Entry(
+                    createUniqueTransaction(2, Coin.COIN), (long) random.nextInt(200)));
+            }
+            long currentBlockNumber = random.nextInt(400);
+            int minimumConfirmations = random.nextInt(60);
+
+            Optional<PegoutsWaitingForConfirmations.Entry> withoutHint =
+                new PegoutsWaitingForConfirmations(entries)
+                    .getNextPegoutWithEnoughConfirmations(currentBlockNumber, minimumConfirmations);
+            Optional<PegoutsWaitingForConfirmations.Entry> withHint =
+                lazy(entries, new PegoutsWaitingForConfirmations(entries).earliestCreationBlock())
+                    .getNextPegoutWithEnoughConfirmations(currentBlockNumber, minimumConfirmations);
+
+            Assertions.assertEquals(withoutHint.isPresent(), withHint.isPresent(),
+                "hint disagreed for " + size + " entries at block " + currentBlockNumber
+                    + " needing " + minimumConfirmations + " confirmations");
+        }
+    }
+
+    @Test
+    void theListIsNotReadWhenTheHintSaysNothingIsConfirmed() {
+        PegoutsWaitingForConfirmations pegouts = lazy(
+            () -> Assertions.fail("the list was read although the hint ruled every entry out"),
+            OptionalLong.of(100L));
+
+        Assertions.assertTrue(pegouts.getNextPegoutWithEnoughConfirmations(150L, 100).isEmpty());
+        Assertions.assertFalse(pegouts.isLoaded());
+    }
+
+    @Test
+    void theListIsReadWhenTheHintAllowsAConfirmedPegout() {
+        Set<PegoutsWaitingForConfirmations.Entry> entries = Set.of(
+            new PegoutsWaitingForConfirmations.Entry(createUniqueTransaction(2, Coin.COIN), 100L));
+        PegoutsWaitingForConfirmations pegouts = lazy(entries, OptionalLong.of(100L));
+
+        Assertions.assertTrue(pegouts.getNextPegoutWithEnoughConfirmations(250L, 100).isPresent());
+        Assertions.assertTrue(pegouts.isLoaded());
+    }
+
+    @Test
+    void withoutAHintTheListIsAlwaysRead() {
+        Set<PegoutsWaitingForConfirmations.Entry> entries = Set.of(
+            new PegoutsWaitingForConfirmations.Entry(createUniqueTransaction(2, Coin.COIN), 10L));
+        PegoutsWaitingForConfirmations pegouts = lazy(entries, OptionalLong.empty());
+
+        Assertions.assertTrue(pegouts.getNextPegoutWithEnoughConfirmations(1_000L, 100).isPresent());
+        Assertions.assertTrue(pegouts.isLoaded());
+    }
+
+    @Test
+    void aListReportsWhetherItHasBeenRead() {
+        Set<PegoutsWaitingForConfirmations.Entry> entries = Set.of(
+            new PegoutsWaitingForConfirmations.Entry(createUniqueTransaction(2, Coin.COIN), 1L));
+        PegoutsWaitingForConfirmations pegouts = lazy(entries, OptionalLong.of(1L));
+
+        Assertions.assertFalse(pegouts.isLoaded());
+        Assertions.assertEquals(1, pegouts.getEntries().size());
+        Assertions.assertTrue(pegouts.isLoaded());
+    }
+
+    private static PegoutsWaitingForConfirmations lazy(
+        Set<PegoutsWaitingForConfirmations.Entry> entries, OptionalLong earliestCreationBlock) {
+        return new PegoutsWaitingForConfirmations(() -> entries, earliestCreationBlock);
+    }
+
+    private static PegoutsWaitingForConfirmations lazy(
+        Supplier<Set<PegoutsWaitingForConfirmations.Entry>> loader, OptionalLong earliestCreationBlock) {
+        return new PegoutsWaitingForConfirmations(loader, earliestCreationBlock);
     }
 
     private BtcTransaction createTransaction(int toPk, Coin value) {

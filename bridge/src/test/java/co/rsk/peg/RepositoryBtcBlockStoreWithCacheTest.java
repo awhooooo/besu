@@ -19,7 +19,11 @@
 package co.rsk.peg;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import co.rsk.bitcoinj.core.*;
@@ -30,6 +34,8 @@ import co.rsk.peg.constants.BridgeConstants;
 import co.rsk.peg.constants.BridgeRegTestConstants;
 import co.rsk.peg.host.BridgeHost;
 import co.rsk.peg.host.InMemoryBridgeHost;
+import co.rsk.peg.utils.StorageKeys;
+import org.apache.tuweni.bytes.Bytes32;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.math.BigInteger;
@@ -466,6 +472,27 @@ class RepositoryBtcBlockStoreWithCacheTest {
             storedBlock = store.get(prevBlockHash);
             storedBlock2 = store2.get(prevBlockHash);
         }
+    }
+
+    @Test
+    void storingHeadersDoesNotReadTheChainHeadBack() throws BlockStoreException {
+        // The store already knows the head it last set, so storing a run of headers must not read it back once per
+        // block: a stored block is five slots, which was fifty slot reads for every ten headers received.
+        BridgeHost host = mock(BridgeHost.class, delegatesTo(new InMemoryBridgeHost()));
+        BtcBlockStoreWithCache btcBlockStore = createBlockStoreOverHost(createBlockStoreFactory(), host);
+        Bytes32 chainHeadKey = StorageKeys.name("blockStoreChainHead");
+
+        StoredBlock head = btcBlockStore.getChainHead();
+        clearInvocations(host);
+
+        for (int height = 1; height <= 10; height++) {
+            head = createStoredBlock(head.getHeader(), height, height);
+            btcBlockStore.put(head);
+            btcBlockStore.setChainHead(head);
+        }
+
+        verify(host, never()).getStorage(chainHeadKey);
+        assertEquals(head, btcBlockStore.getChainHead());
     }
 
     private BtcBlockStoreWithCache createBlockStore() {

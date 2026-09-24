@@ -61,8 +61,9 @@ import org.apache.tuweni.units.bigints.UInt256;
  */
 class StorageLayoutFingerprintTest {
 
-    private static final int EXPECTED_SLOTS = 224;
-    private static final String EXPECTED_DIGEST = "0xea23fca93c895dbc4e1c157637cfea9c1deee63d06ea70d2762923dc2c02d109";
+    // 225 since step 8 added the one slot summarising the pegouts awaiting confirmation (224 before it)
+    private static final int EXPECTED_SLOTS = 225;
+    private static final String EXPECTED_DIGEST = "0xb52161cf0d1bc6743b7aa0e7af78e54052fc5817cb58a4d497aee448fdd04b50";
 
     private static final BridgeConstants constants = BridgeMainNetConstants.getInstance();
     private static final NetworkParameters params = constants.getBtcParams();
