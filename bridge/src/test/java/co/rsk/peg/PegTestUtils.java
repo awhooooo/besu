@@ -2,13 +2,27 @@ package co.rsk.peg;
 
 import co.rsk.bitcoinj.core.Address;
 import co.rsk.bitcoinj.core.BtcECKey;
+import co.rsk.bitcoinj.core.Coin;
+import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.bitcoinj.core.Sha256Hash;
+import co.rsk.bitcoinj.core.TransactionOutput;
+import co.rsk.bitcoinj.core.UTXO;
 import co.rsk.bitcoinj.script.Script;
 import co.rsk.bitcoinj.script.ScriptBuilder;
+import co.rsk.peg.bitcoin.FlyoverRedeemScriptBuilderImpl;
+import co.rsk.peg.constants.BridgeConstants;
 import co.rsk.peg.federation.Federation;
+import co.rsk.peg.federation.FederationArgs;
+import co.rsk.peg.federation.FederationFactory;
+import co.rsk.peg.federation.FederationMember;
+import co.rsk.peg.federation.FederationTestUtils;
 import co.rsk.peg.host.CallContext;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
+
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +58,62 @@ public final class PegTestUtils {
         bytes[2] = (byte) (0xFF & nHash >> 16);
         bytes[3] = (byte) (0xFF & nHash >> 24);
         return Sha256Hash.wrap(bytes);
+    }
+
+    public static Address createRandomP2PKHBtcAddress(NetworkParameters networkParameters) {
+        BtcECKey key = new BtcECKey();
+        return key.toAddress(networkParameters);
+    }
+
+    /** RSKj's createRandomRskAddress: the address of a fresh key. */
+    public static org.hyperledger.besu.datatypes.Address createRandomRskAddress() {
+        return co.rsk.peg.utils.PublicKeys.addressOf(new BtcECKey());
+    }
+
+    public static UTXO createUTXO(Sha256Hash btcHash, long index, Coin value) {
+        return new UTXO(
+            btcHash,
+            index,
+            value,
+            10,
+            false,
+            ScriptBuilder.createOutputScript(new BtcECKey())
+        );
+    }
+
+    public static TransactionOutput createBech32Output(NetworkParameters networkParameters, Coin valuesToSend) {
+        byte[] scriptBytes = networkParameters.getId().equals(NetworkParameters.ID_MAINNET) ?
+            Hex.decode("001437c383ea78269585c73289daa36d7b7014b65294") :
+            Hex.decode("0014ef57424d0d625cf82fabe4fd7657d24a5f13dfb2");
+        return new TransactionOutput(networkParameters, null, valuesToSend, scriptBytes);
+    }
+
+    public static Federation createFederation(BridgeConstants bridgeConstants, String... fedKeys) {
+        List<BtcECKey> federationKeys = Arrays.stream(fedKeys)
+            .map(s -> BtcECKey.fromPrivate(Hex.decode(s)))
+            .collect(Collectors.toList());
+        return createFederation(bridgeConstants, federationKeys);
+    }
+
+    public static Federation createFederation(BridgeConstants bridgeConstants, List<BtcECKey> federationKeys) {
+        federationKeys.sort(BtcECKey.PUBKEY_COMPARATOR);
+        List<FederationMember> fedMembers = FederationTestUtils.getFederationMembersWithBtcKeys(federationKeys);
+        Instant creationTime = Instant.ofEpochMilli(1000L);
+        NetworkParameters btcParams = bridgeConstants.getBtcParams();
+
+        FederationArgs federationArgs = new FederationArgs(fedMembers, creationTime, 0L, btcParams);
+        return FederationFactory.buildStandardMultiSigFederation(federationArgs);
+    }
+
+    public static Address getFlyoverAddressFromRedeemScript(BridgeConstants bridgeConstants, Script redeemScript, Sha256Hash derivationArgumentHash) {
+        Hash flyoverDerivationHash = Hash.wrap(Bytes32.wrap(derivationArgumentHash.getBytes()));
+        Script flyoverRedeemScript = FlyoverRedeemScriptBuilderImpl.builder().of(
+            flyoverDerivationHash,
+            redeemScript
+        );
+
+        Script flyoverP2SH = ScriptBuilder.createP2SHOutputScript(flyoverRedeemScript);
+        return Address.fromP2SHScript(bridgeConstants.getBtcParams(), flyoverP2SH);
     }
 
     public static Script createBaseInputScriptThatSpendsFromTheFederation(Federation federation) {
