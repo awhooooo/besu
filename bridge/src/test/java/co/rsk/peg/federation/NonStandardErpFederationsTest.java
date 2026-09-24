@@ -1,0 +1,700 @@
+package co.rsk.peg.federation;
+
+import static co.rsk.peg.bitcoin.RedeemScriptCreationException.Reason.INVALID_CSV_VALUE;
+import static co.rsk.peg.bitcoin.ScriptCreationException.Reason.ABOVE_MAX_SCRIPTSIG_ELEMENT_SIZE;
+import static co.rsk.peg.bitcoin.ScriptValidations.MAX_P2SH_REDEEM_SCRIPT_SIZE;
+import static co.rsk.peg.federation.ErpFederationCreationException.Reason.NULL_OR_EMPTY_EMERGENCY_KEYS;
+import static co.rsk.peg.federation.ErpFederationCreationException.Reason.REDEEM_SCRIPT_CREATION_FAILED;
+import static org.junit.jupiter.api.Assertions.*;
+
+import co.rsk.bitcoinj.core.*;
+import co.rsk.bitcoinj.script.Script;
+import co.rsk.bitcoinj.script.ScriptOpCodes;
+import co.rsk.peg.bitcoin.*;
+import co.rsk.peg.federation.constants.*;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.io.InputStream;
+import java.math.BigInteger;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import org.bouncycastle.util.encoders.Hex;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class NonStandardErpFederationsTest {
+    private ErpFederation nonStandardErpFederation;
+    private NetworkParameters networkParameters;
+    private List<BtcECKey> defaultKeys;
+    private int defaultThreshold;
+    private List<BtcECKey> emergencyKeys;
+    private int emergencyThreshold;
+    private long activationDelayValue;
+
+    @BeforeEach
+    void setup() {
+        FederationConstants federationMainNetConstants = FederationMainNetConstants.getInstance();
+
+        BtcECKey federator0PublicKey = BtcECKey.fromPublicOnly(Hex.decode("03b53899c390573471ba30e5054f78376c5f797fda26dde7a760789f02908cbad2"));
+        BtcECKey federator1PublicKey = BtcECKey.fromPublicOnly(Hex.decode("027319afb15481dbeb3c426bcc37f9a30e7f51ceff586936d85548d9395bcc2344"));
+        BtcECKey federator2PublicKey = BtcECKey.fromPublicOnly(Hex.decode("0355a2e9bf100c00fc0a214afd1bf272647c7824eb9cb055480962f0c382596a70"));
+        BtcECKey federator3PublicKey = BtcECKey.fromPublicOnly(Hex.decode("02566d5ded7c7db1aa7ee4ef6f76989fb42527fcfdcddcd447d6793b7d869e46f7"));
+        BtcECKey federator4PublicKey = BtcECKey.fromPublicOnly(Hex.decode("0294c817150f78607566e961b3c71df53a22022a80acbb982f83c0c8baac040adc"));
+        BtcECKey federator5PublicKey = BtcECKey.fromPublicOnly(Hex.decode("0372cd46831f3b6afd4c044d160b7667e8ebf659d6cb51a825a3104df6ee0638c6"));
+        BtcECKey federator6PublicKey = BtcECKey.fromPublicOnly(Hex.decode("0340df69f28d69eef60845da7d81ff60a9060d4da35c767f017b0dd4e20448fb44"));
+        BtcECKey federator7PublicKey = BtcECKey.fromPublicOnly(Hex.decode("02ac1901b6fba2c1dbd47d894d2bd76c8ba1d296d65f6ab47f1c6b22afb53e73eb"));
+        BtcECKey federator8PublicKey = BtcECKey.fromPublicOnly(Hex.decode("031aabbeb9b27258f98c2bf21f36677ae7bae09eb2d8c958ef41a20a6e88626d26"));
+        defaultKeys = Arrays.asList(
+            federator0PublicKey, federator1PublicKey, federator2PublicKey,
+            federator3PublicKey, federator4PublicKey, federator5PublicKey,
+            federator6PublicKey, federator7PublicKey, federator8PublicKey
+        );
+        defaultThreshold = defaultKeys.size() / 2 + 1;
+        emergencyKeys = federationMainNetConstants.getErpFedPubKeysList();
+        emergencyThreshold = emergencyKeys.size() / 2 + 1;
+        activationDelayValue = federationMainNetConstants.getErpFedActivationDelay();
+        networkParameters = federationMainNetConstants.getBtcParams();
+
+        nonStandardErpFederation = createDefaultNonStandardErpFederation();
+    }
+
+    private ErpFederation createDefaultNonStandardErpFederation() {
+        List<FederationMember> standardMembers = FederationTestUtils.getFederationMembersWithBtcKeys(defaultKeys);
+        Instant creationTime = ZonedDateTime.parse("2017-06-10T02:30:00Z").toInstant();
+        long creationBlockNumber = 0L;
+
+        FederationArgs federationArgs = new FederationArgs(
+            standardMembers,
+            creationTime,
+            creationBlockNumber,
+            networkParameters
+        );
+        return FederationFactory.buildNonStandardErpFederation(
+            federationArgs,
+            emergencyKeys,
+            activationDelayValue
+        );
+    }
+
+    @Test
+    void createFederation_withNullErpKeys_throwsErpFederationCreationException() {
+        emergencyKeys = null;
+        ErpFederationCreationException exception = assertThrows(
+            ErpFederationCreationException.class, this::createDefaultNonStandardErpFederation
+        );
+        assertEquals(NULL_OR_EMPTY_EMERGENCY_KEYS, exception.getReason());
+    }
+
+    @Test
+    void createFederation_withEmptyErpKeys_throwsErpFederationCreationException() {
+        emergencyKeys = new ArrayList<>();
+        ErpFederationCreationException exception = assertThrows(
+            ErpFederationCreationException.class, this::createDefaultNonStandardErpFederation
+        );
+        assertEquals(NULL_OR_EMPTY_EMERGENCY_KEYS, exception.getReason());
+    }
+
+    @Test
+    void createFederation_withOneErpKey_valid() {
+        emergencyKeys = Collections.singletonList(emergencyKeys.get(0));
+        emergencyThreshold = emergencyKeys.size() / 2 + 1;
+
+        assertDoesNotThrow(() -> NonStandardErpRedeemScriptBuilder.builder().of(
+            defaultKeys,
+            defaultThreshold,
+            emergencyKeys,
+            emergencyThreshold,
+            activationDelayValue
+        ));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-100, 0})
+    void createFederation_withInvalidThresholdValues_throwsIllegalArgumentException(int threshold) {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> NonStandardErpRedeemScriptBuilder.builder().of(
+                defaultKeys,
+                threshold,
+                emergencyKeys,
+                emergencyThreshold,
+                activationDelayValue
+            )
+        );
+    }
+
+    @Test
+    void createFederation_withThresholdAboveDefaultKeysSize_throwsIllegalArgumentException() {
+        int defaultThresholdAboveDefaultKeysSize = defaultKeys.size() + 1;
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> NonStandardErpRedeemScriptBuilder.builder().of(
+                defaultKeys,
+                defaultThresholdAboveDefaultKeysSize,
+                emergencyKeys,
+                emergencyThreshold,
+                activationDelayValue
+            )
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = { 130L, 500L, 33_000L, ErpRedeemScriptBuilderUtils.MAX_CSV_VALUE})
+    void createFederation_withValidCsvValues_valid(long csvValue) {
+        activationDelayValue = csvValue;
+
+        createAndValidateFederation();
+
+        // Also check the builder is the expected one
+        ErpRedeemScriptBuilder builder = nonStandardErpFederation.getErpRedeemScriptBuilder();
+        assertInstanceOf(NonStandardErpRedeemScriptBuilder.class, builder);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {-100L, 0L, ErpRedeemScriptBuilderUtils.MAX_CSV_VALUE + 1, 100_000L, 8_400_000L })
+    void createFederation_withInvalidCsvValues_throwsErpFederationCreationException(long csvValue) {
+        activationDelayValue = csvValue;
+
+        ErpFederationCreationException fedException = assertThrows(
+            ErpFederationCreationException.class,
+            this::createDefaultNonStandardErpFederation);
+        assertEquals(REDEEM_SCRIPT_CREATION_FAILED, fedException.getReason());
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {-100L, 0L, ErpRedeemScriptBuilderUtils.MAX_CSV_VALUE + 1, 100_000L, 8_400_000L })
+    void of_withInvalidCsvValues_throwsErpFederationCreationException(long csvValue) {
+        activationDelayValue = csvValue;
+
+        // Check the builder throws the particular expected exception
+        ErpRedeemScriptBuilder builder = NonStandardErpRedeemScriptBuilder.builder();
+        RedeemScriptCreationException exception = assertThrows(
+            RedeemScriptCreationException.class,
+            () -> builder.of(
+                defaultKeys, defaultThreshold,
+                emergencyKeys, emergencyThreshold,
+                activationDelayValue)
+        );
+        assertEquals(INVALID_CSV_VALUE, exception.getReason());
+    }
+
+    @Test
+    void createFederation_withRedeemScriptSizeAboveMaximum_throwsScriptCreationException() {
+        // add one member to exceed redeem script size limit
+        List<BtcECKey> newDefaultKeys = nonStandardErpFederation.getBtcPublicKeys();
+        BtcECKey federator10PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("02550cc87fa9061162b1dd395a16662529c9d8094c0feca17905a3244713d65fe8")
+        );
+        newDefaultKeys.add(federator10PublicKey);
+        defaultKeys = newDefaultKeys;
+
+        ScriptCreationException exception = assertThrows(
+            ScriptCreationException.class,
+            () -> NonStandardErpRedeemScriptBuilder.builder().of(
+                defaultKeys,
+                defaultThreshold,
+                emergencyKeys,
+                emergencyThreshold,
+                activationDelayValue
+            )
+        );
+        assertEquals(ABOVE_MAX_SCRIPTSIG_ELEMENT_SIZE, exception.getReason());
+    }
+
+    @Test
+    void getErpPubKeys() {
+        assertEquals(emergencyKeys, nonStandardErpFederation.getErpPubKeys());
+    }
+
+    @Test
+    void getActivationDelay() {
+        assertEquals(activationDelayValue, nonStandardErpFederation.getActivationDelay());
+    }
+
+    @Test
+    void testEquals_basic() {
+        assertEquals(nonStandardErpFederation, nonStandardErpFederation);
+
+        assertNotEquals(null, nonStandardErpFederation);
+        assertNotEquals(new Object(), nonStandardErpFederation);
+        assertNotEquals("something else", nonStandardErpFederation);
+    }
+
+    @Test
+    void testEquals_same() {
+        FederationArgs federationArgs = new FederationArgs(
+            nonStandardErpFederation.getMembers(),
+            nonStandardErpFederation.getCreationTime(),
+            nonStandardErpFederation.getCreationBlockNumber(),
+            nonStandardErpFederation.getBtcParams()
+        );
+        ErpFederation otherFederation = FederationFactory.buildNonStandardErpFederation(
+            federationArgs,
+            nonStandardErpFederation.getErpPubKeys(),
+            nonStandardErpFederation.getActivationDelay()
+        );
+
+        assertEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void federationArgs_from_values_equals_federationArgs_from_nonStandardErpFederation() {
+        List<FederationMember> federationMembers = nonStandardErpFederation.getMembers();
+        Instant creationTime = nonStandardErpFederation.getCreationTime();
+        long creationBlockNumber = nonStandardErpFederation.getCreationBlockNumber();
+        NetworkParameters btcParams = nonStandardErpFederation.getBtcParams();
+
+        FederationArgs federationArgsFromValues = new FederationArgs(
+            federationMembers,
+            creationTime,
+            creationBlockNumber,
+            btcParams
+        );
+        FederationArgs federationArgs = nonStandardErpFederation.getArgs();
+
+        assertEquals(federationArgs, federationArgsFromValues);
+    }
+
+    @Test
+    void nonStandardErpFederation_from_federationArgs_and_erp_values_equals_nonStandardErpFederation() {
+        FederationArgs federationArgs = nonStandardErpFederation.getArgs();
+        ErpFederation nonStandardErpFederationFromFederationArgs = FederationFactory.buildNonStandardErpFederation(
+            federationArgs,
+            emergencyKeys,
+            activationDelayValue
+        );
+
+        assertEquals(nonStandardErpFederation, nonStandardErpFederationFromFederationArgs);
+    }
+
+    @Test
+    void testEquals_differentCreationTime() {
+        FederationArgs federationArgs = new FederationArgs(
+            nonStandardErpFederation.getMembers(),
+            nonStandardErpFederation.getCreationTime().plus(1, ChronoUnit.MILLIS),
+            nonStandardErpFederation.getCreationBlockNumber(),
+            nonStandardErpFederation.getBtcParams()
+        );
+        ErpFederation otherFederation = FederationFactory.buildNonStandardErpFederation(
+            federationArgs,
+            nonStandardErpFederation.getErpPubKeys(),
+            nonStandardErpFederation.getActivationDelay()
+        );
+
+        assertEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void testEquals_differentCreationBlockNumber() {
+        FederationArgs federationArgs = new FederationArgs(
+            nonStandardErpFederation.getMembers(),
+            nonStandardErpFederation.getCreationTime(),
+            nonStandardErpFederation.getCreationBlockNumber() + 1,
+            nonStandardErpFederation.getBtcParams()
+        );
+        ErpFederation otherFederation = FederationFactory.buildNonStandardErpFederation(
+            federationArgs,
+            nonStandardErpFederation.getErpPubKeys(),
+            nonStandardErpFederation.getActivationDelay()
+        );
+
+        assertEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void testEquals_differentNetworkParameters() {
+        networkParameters = NetworkParameters.fromID(NetworkParameters.ID_REGTEST);
+
+        ErpFederation otherFederation = createDefaultNonStandardErpFederation();
+        assertNotEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void testEquals_differentNumberOfMembers() {
+        // remove federator9
+        List<BtcECKey> newDefaultKeys = nonStandardErpFederation.getBtcPublicKeys();
+        newDefaultKeys.remove(newDefaultKeys.size() - 1);
+        defaultKeys = newDefaultKeys;
+
+        ErpFederation otherFederation = createDefaultNonStandardErpFederation();
+        assertNotEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void testEquals_differentMembers() {
+        // replace federator8 with federator9
+        BtcECKey federator9PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("0245ef34f5ee218005c9c21227133e8568a4f3f11aeab919c66ff7b816ae1ffeea")
+        );
+        List<BtcECKey> newDefaultKeys = nonStandardErpFederation.getBtcPublicKeys();
+        newDefaultKeys.remove(8);
+        newDefaultKeys.add(federator9PublicKey);
+        defaultKeys = newDefaultKeys;
+
+        ErpFederation otherFederation = createDefaultNonStandardErpFederation();
+        assertNotEquals(nonStandardErpFederation, otherFederation);
+    }
+
+    @Test
+    void createdRedeemScriptProgramFromNonStandardErpBuilder_withRealValues_equalsRealRedeemScriptProgram_mainnet() {
+        byte[] expectedRedeemScriptProgram = // this is the redeem script program from fed non-standard
+            Hex.decode("6453210208f40073a9e43b3e9103acec79767a6de9b0409749884e989960fee578012fce210225e892391625854128c5c4ea4340de0c2a70570f33db53426fc9c746597a03f421025a2f522aea776fab5241ad72f7f05918e8606676461cb6ce38265a52d4ca9ed62102afc230c2d355b1a577682b07bc2646041b5d0177af0f98395a46018da699b6da2103fb8e1d5d0392d35ca8c3656acb6193dbf392b3e89b9b7b86693f5c80f7ce858155670350cd00b27552210216c23b2ea8e4f11c3f9e22711addb1d16a93964796913830856b568cc3ea21d3210275562901dd8faae20de0a4166362a4f82188db77dbed4ca887422ea1ec185f1421034db69f2112f4fb1bb6141bf6e2bd6631f0484d0bd95b16767902c9fe219d4a6f5368ae");
+
+        // these values belong to the non-standard fed
+        BtcECKey federator0PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("0208f40073a9e43b3e9103acec79767a6de9b0409749884e989960fee578012fce")
+        );
+        BtcECKey federator1PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("0225e892391625854128c5c4ea4340de0c2a70570f33db53426fc9c746597a03f4")
+        );
+        BtcECKey federator2PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("025a2f522aea776fab5241ad72f7f05918e8606676461cb6ce38265a52d4ca9ed6")
+        );
+        BtcECKey federator3PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("02afc230c2d355b1a577682b07bc2646041b5d0177af0f98395a46018da699b6da")
+        );
+        BtcECKey federator4PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("03fb8e1d5d0392d35ca8c3656acb6193dbf392b3e89b9b7b86693f5c80f7ce8581")
+        );
+        defaultKeys = Arrays.asList(
+            federator0PublicKey,
+            federator1PublicKey,
+            federator2PublicKey,
+            federator3PublicKey,
+            federator4PublicKey
+        );
+        defaultThreshold = defaultKeys.size() / 2 + 1;
+
+        BtcECKey emergency0PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("0216c23b2ea8e4f11c3f9e22711addb1d16a93964796913830856b568cc3ea21d3")
+        );
+        BtcECKey emergency1PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("0275562901dd8faae20de0a4166362a4f82188db77dbed4ca887422ea1ec185f14")
+        );
+        BtcECKey emergency2PublicKey = BtcECKey.fromPublicOnly(
+            Hex.decode("034db69f2112f4fb1bb6141bf6e2bd6631f0484d0bd95b16767902c9fe219d4a6f")
+        );
+        emergencyKeys = Arrays.asList(
+            emergency0PublicKey,
+            emergency1PublicKey,
+            emergency2PublicKey
+        );
+        emergencyThreshold = emergencyKeys.size() / 2 + 1;
+        activationDelayValue = 52_560L;
+
+        // this should create the expected non-standard fed
+        nonStandardErpFederation = createDefaultNonStandardErpFederation();
+
+        ErpRedeemScriptBuilder builder = nonStandardErpFederation.getErpRedeemScriptBuilder();
+        Script obtainedRedeemScript = builder.of(
+            defaultKeys,
+            defaultThreshold,
+            emergencyKeys,
+            emergencyThreshold,
+            activationDelayValue
+        );
+
+        assertArrayEquals(expectedRedeemScriptProgram, obtainedRedeemScript.getProgram());
+    }
+
+    @Test
+    void createdFederationInfo_withRealValues_equalsExistingFederationInfo_testnet() {
+        // values from last real non-standard erp fed in testnet
+        FederationConstants federationTestNetConstants = FederationTestNetConstants.getInstance();
+        networkParameters = federationTestNetConstants.getBtcParams();
+        emergencyKeys = federationTestNetConstants.getErpFedPubKeysList();
+        activationDelayValue = federationTestNetConstants.getErpFedActivationDelay();
+
+        defaultKeys = Arrays.stream(new String[]{
+            "0208f40073a9e43b3e9103acec79767a6de9b0409749884e989960fee578012fce",
+            "0225e892391625854128c5c4ea4340de0c2a70570f33db53426fc9c746597a03f4",
+            "025a2f522aea776fab5241ad72f7f05918e8606676461cb6ce38265a52d4ca9ed6",
+            "02afc230c2d355b1a577682b07bc2646041b5d0177af0f98395a46018da699b6da",
+            "0344a3c38cd59afcba3edcebe143e025574594b001700dec41e59409bdbd0f2a09",
+        }).map(hex -> BtcECKey.fromPublicOnly(Hex.decode(hex))).toList();
+        String expectedProgram = "a91412d5d2996618c8abcb1e6fc17be3cd8e2790c25f87";
+        Address expectedAddress = Address.fromBase58(networkParameters, "2MtxpJPt2xCa3AyFYUjTT7Aop9Z6gGf4rqA");
+        // this should create the real fed
+        ErpFederation realNonStandardErpFederation = createDefaultNonStandardErpFederation();
+        Script p2shScript = realNonStandardErpFederation.getP2SHScript();
+        Address address = realNonStandardErpFederation.getAddress();
+
+        assertEquals(expectedProgram, Hex.toHexString(p2shScript.getProgram()));
+        assertEquals(3, p2shScript.getChunks().size());
+        assertEquals(address, p2shScript.getToAddress(networkParameters));
+        assertEquals(expectedAddress, address);
+    }
+
+    @Test
+    void getErpPubKeys_fromUncompressedPublicKeys_equals() {
+        // Public keys used for creating nonStandardErpFederation, but uncompressed format now
+        emergencyKeys = emergencyKeys.stream()
+            .map(BtcECKey::decompress)
+            .toList();
+
+        // Recreate nonStandardErpFederation
+        ErpFederation federationWithUncompressedKeys = createDefaultNonStandardErpFederation();
+        assertEquals(emergencyKeys, federationWithUncompressedKeys.getErpPubKeys());
+    }
+
+    @Test
+    void getNonStandardErpRedeemScript_compareOtherImplementation() throws IOException {
+        RawGeneratedRedeemScript[] generatedScripts;
+        try (InputStream rawRedeemScripts = NonStandardErpFederationsTest.class.getResourceAsStream("/redeemScripts.json")) {
+            generatedScripts = new ObjectMapper().readValue(rawRedeemScripts, RawGeneratedRedeemScript[].class);
+        }
+        for (RawGeneratedRedeemScript generatedScript : generatedScripts) {
+            // Skip test cases with invalid redeem script that exceed the maximum size
+            if (generatedScript.script.getProgram().length <= MAX_P2SH_REDEEM_SCRIPT_SIZE) {
+                networkParameters = NetworkParameters.fromID(NetworkParameters.ID_TESTNET);
+                defaultKeys = generatedScript.mainFed;
+                emergencyKeys = generatedScript.emergencyFed;
+                activationDelayValue = generatedScript.timelock;
+
+                nonStandardErpFederation = createDefaultNonStandardErpFederation();
+                Script rskjScript = nonStandardErpFederation.getRedeemScript();
+                Script alternativeScript = generatedScript.script;
+
+                assertEquals(alternativeScript, rskjScript);
+            }
+        }
+    }
+
+    @Test
+    void getRedeemScript() {
+        nonStandardErpFederation = createDefaultNonStandardErpFederation();
+        Script redeemScript = nonStandardErpFederation.getRedeemScript();
+
+        validateErpRedeemScript(
+            redeemScript,
+            activationDelayValue
+        );
+    }
+
+    @Test
+    void createErpFederation_testnet_constants() {
+        networkParameters = NetworkParameters.fromID(NetworkParameters.ID_TESTNET);
+        createAndValidateFederation();
+    }
+
+    @Test
+    void createErpFederation_mainnet_constants() {
+        networkParameters = NetworkParameters.fromID(NetworkParameters.ID_MAINNET);
+        createAndValidateFederation();
+    }
+
+    @Test
+    void spendFromNonStandardErpFed_testnet_using_erp_multisig_can_spend() {
+        FederationTestNetConstants federationTestNetConstants = FederationTestNetConstants.getInstance();
+
+        // The CSV value is encoded correctly, so the emergency multisig can spend after the delay
+        assertDoesNotThrow(() -> spendFromNonStandardErpFed(
+            federationTestNetConstants.getBtcParams(),
+            federationTestNetConstants.getErpFedActivationDelay(),
+            true
+        ));
+    }
+
+    @Test
+    void spendFromNonStandardErpFed_testnet_using_standard_multisig_can_spend() {
+        FederationTestNetConstants federationTestNetConstants = FederationTestNetConstants.getInstance();
+
+        assertDoesNotThrow(() -> spendFromNonStandardErpFed(
+            federationTestNetConstants.getBtcParams(),
+            federationTestNetConstants.getErpFedActivationDelay(),
+            false
+        ));
+    }
+
+    @Test
+    void spendFromNonStandardErpFed_mainnet_using_erp_multisig_can_spend() {
+        FederationMainNetConstants federationMainNetConstants = FederationMainNetConstants.getInstance();
+
+        // The CSV value is encoded correctly, so the emergency multisig can spend after the delay
+        assertDoesNotThrow(() -> spendFromNonStandardErpFed(
+            federationMainNetConstants.getBtcParams(),
+            federationMainNetConstants.getErpFedActivationDelay(),
+            true
+        ));
+    }
+
+    @Test
+    void spendFromNonStandardErpFed_mainnet_using_standard_multisig_can_spend() {
+        FederationMainNetConstants federationMainNetConstants = FederationMainNetConstants.getInstance();
+
+        assertDoesNotThrow(() -> spendFromNonStandardErpFed(
+            federationMainNetConstants.getBtcParams(),
+            federationMainNetConstants.getErpFedActivationDelay(),
+            false
+        ));
+    }
+
+    private void createAndValidateFederation() {
+
+        nonStandardErpFederation = createDefaultNonStandardErpFederation();
+
+        validateErpRedeemScript(
+            nonStandardErpFederation.getRedeemScript(),
+            defaultKeys,
+            emergencyKeys,
+            activationDelayValue
+        );
+    }
+
+    private void spendFromNonStandardErpFed(
+        NetworkParameters networkParametersValue,
+        long activationDelay,
+        boolean signWithEmergencyMultisig) {
+
+        defaultKeys = BitcoinTestUtils.getBtcEcKeysFromSeeds(
+            new String[]{"fed1", "fed2", "fed3", "fed4", "fed5", "fed6", "fed7", "fed8", "fed9"},
+            true
+        );
+
+        emergencyKeys = BitcoinTestUtils.getBtcEcKeysFromSeeds(
+            new String[]{"erp1", "erp2", "erp3", "erp4"},
+            true
+        );
+
+        networkParameters = networkParametersValue;
+        activationDelayValue = activationDelay;
+
+        nonStandardErpFederation = createDefaultNonStandardErpFederation();
+
+        Coin value = Coin.valueOf(1_000_000);
+        Coin fee = Coin.valueOf(10_000);
+        BtcTransaction fundTx = new BtcTransaction(networkParameters);
+        fundTx.addOutput(value, nonStandardErpFederation.getAddress());
+
+        Address destinationAddress = BitcoinTestUtils.createP2PKHAddress(
+            networkParameters,
+            "destination"
+        );
+
+        FederationTestUtils.spendFromErpFed(
+            networkParameters,
+            nonStandardErpFederation,
+            signWithEmergencyMultisig ? emergencyKeys : defaultKeys,
+            fundTx.getHash(),
+            0,
+            destinationAddress,
+            value.minus(fee),
+            signWithEmergencyMultisig
+        );
+    }
+
+    private void validateErpRedeemScript(
+        Script erpRedeemScript,
+        Long csvValue) {
+
+        validateErpRedeemScript(
+            erpRedeemScript,
+            defaultKeys,
+            emergencyKeys,
+            csvValue
+        );
+    }
+
+    private void validateErpRedeemScript(
+        Script erpRedeemScript,
+        List<BtcECKey> defaultMultisigKeys,
+        List<BtcECKey> emergencyMultisigKeys,
+        Long csvValue) {
+
+        // Keys are sorted when added to the redeem script, so we need them sorted in order to validate
+        defaultMultisigKeys.sort(BtcECKey.PUBKEY_COMPARATOR);
+        emergencyMultisigKeys.sort(BtcECKey.PUBKEY_COMPARATOR);
+
+        int expectedCsvValueLength = BigInteger.valueOf(csvValue).toByteArray().length;
+
+        byte[] serializedCsvValue = Utils.signedLongToByteArrayLE(csvValue);
+
+        byte[] script = erpRedeemScript.getProgram();
+        Assertions.assertTrue(script.length > 0);
+
+        int index = 0;
+
+        // First byte should equal OP_NOTIF
+        assertEquals(ScriptOpCodes.OP_NOTIF, script[index++]);
+
+        // Next byte should equal M, from an M/N multisig
+        int m = defaultMultisigKeys.size() / 2 + 1;
+        assertEquals(ScriptOpCodes.getOpCode(String.valueOf(m)), script[index++]);
+
+        // Assert public keys
+        for (BtcECKey key: defaultMultisigKeys) {
+            byte[] pubkey = key.getPubKey();
+            assertEquals(pubkey.length, script[index++]);
+            for (byte b : pubkey) {
+                assertEquals(b, script[index++]);
+            }
+        }
+
+        // Next byte should equal N, from an M/N multisig
+        int n = defaultMultisigKeys.size();
+        assertEquals(ScriptOpCodes.getOpCode(String.valueOf(n)), script[index++]);
+
+        // Next byte should equal OP_ELSE
+        assertEquals(ScriptOpCodes.OP_ELSE, script[index++]);
+
+        // Next byte should equal csv value length
+        assertEquals(expectedCsvValueLength, script[index++]);
+
+        // Next bytes should equal the csv value in bytes
+        for (int i = 0; i < expectedCsvValueLength; i++) {
+            assertEquals(serializedCsvValue[i], script[index++]);
+        }
+
+        assertEquals((byte) ScriptOpCodes.OP_CHECKSEQUENCEVERIFY, script[index++]);
+        assertEquals(ScriptOpCodes.OP_DROP, script[index++]);
+
+        // Next byte should equal M, from an M/N multisig
+        m = emergencyMultisigKeys.size() / 2 + 1;
+        assertEquals(ScriptOpCodes.getOpCode(String.valueOf(m)), script[index++]);
+
+        for (BtcECKey key: emergencyMultisigKeys) {
+            byte[] pubkey = key.getPubKey();
+            assertEquals(pubkey.length, script[index++]);
+            for (byte b : pubkey) {
+                assertEquals(b, script[index++]);
+            }
+        }
+
+        // Next byte should equal N, from an M/N multisig
+        n = emergencyMultisigKeys.size();
+        assertEquals(ScriptOpCodes.getOpCode(String.valueOf(n)), script[index++]);
+
+        assertEquals(ScriptOpCodes.OP_ENDIF, script[index++]);
+        assertEquals((byte) ScriptOpCodes.OP_CHECKMULTISIG, script[index]);
+    }
+
+    private static class RawGeneratedRedeemScript {
+        List<BtcECKey> mainFed;
+        List<BtcECKey> emergencyFed;
+        Long timelock;
+        Script script;
+
+        @JsonCreator
+        public RawGeneratedRedeemScript(@JsonProperty("mainFed") List<String> mainFed,
+                                        @JsonProperty("emergencyFed") List<String> emergencyFed,
+                                        @JsonProperty("timelock") Long timelock,
+                                        @JsonProperty("script") String script) {
+            this.mainFed = parseFed(mainFed);
+            this.emergencyFed = parseFed(emergencyFed);
+            this.timelock = timelock;
+            this.script = new Script(Hex.decode(script));
+        }
+
+        private List<BtcECKey> parseFed(List<String> fed) {
+            return fed.stream().map(Hex::decode).map(BtcECKey::fromPublicOnly).toList();
+        }
+    }
+}
