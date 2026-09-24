@@ -5,6 +5,7 @@ import co.rsk.bitcoinj.core.BtcECKey;
 import co.rsk.bitcoinj.core.Sha256Hash;
 import co.rsk.bitcoinj.script.Script;
 import co.rsk.bitcoinj.script.ScriptBuilder;
+import co.rsk.peg.federation.Federation;
 import co.rsk.peg.host.CallContext;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
@@ -43,6 +44,11 @@ public final class PegTestUtils {
         bytes[2] = (byte) (0xFF & nHash >> 16);
         bytes[3] = (byte) (0xFF & nHash >> 24);
         return Sha256Hash.wrap(bytes);
+    }
+
+    public static Script createBaseInputScriptThatSpendsFromTheFederation(Federation federation) {
+        Script scriptPubKey = federation.getP2SHScript();
+        return scriptPubKey.createEmptyInputScript(null, federation.getRedeemScript());
     }
 
     public static Script createOpReturnScriptForRsk(
