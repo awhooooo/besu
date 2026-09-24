@@ -10,6 +10,7 @@ import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.util.Arrays;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -23,6 +24,10 @@ import org.apache.tuweni.units.bigints.UInt256;
  * builds the frame: the transaction hash, whether the execution is a simulation, and the origin's public
  * key. The first two are mandatory for the bridge to run; asking for them when absent fails loudly rather
  * than letting a mis-wired node store zero hashes into consensus state.
+ *
+ * <p>Besu enforces {@code STATICCALL} inside the opcodes, so a precompile polices itself: on a static frame
+ * the host refuses a storage change, a transfer and a log. Writing a value that is already there is not a
+ * change, so read-only bridge methods that re-save unchanged state keep working under a static call.
  */
 public final class FrameBridgeHost implements BridgeHost {
 
@@ -116,6 +121,9 @@ public final class FrameBridgeHost implements BridgeHost {
 
     @Override
     public void putStorage(Bytes32 key, byte[] value) {
+        if (frame.isStatic() && !Arrays.equals(getStorage(key), value)) {
+            throw staticChange("storage write");
+        }
         new ChunkedStorage(bridgeAccount()).put(key, value);
     }
 
@@ -128,6 +136,9 @@ public final class FrameBridgeHost implements BridgeHost {
     public void putSlot(UInt256 slot, UInt256 value) {
         MutableAccount account = bridgeAccount();
         if (!account.getStorageValue(slot).equals(value)) {
+            if (frame.isStatic()) {
+                throw staticChange("storage write");
+            }
             account.setStorageValue(slot, value);
         }
     }
@@ -143,13 +154,23 @@ public final class FrameBridgeHost implements BridgeHost {
         if (amount.isZero()) {
             return;
         }
+        if (frame.isStatic()) {
+            throw staticChange("transfer");
+        }
         world().getOrCreate(from).decrementBalance(amount);
         world().getOrCreate(to).incrementBalance(amount);
     }
 
     @Override
     public void emitLog(Log log) {
+        if (frame.isStatic()) {
+            throw staticChange("log");
+        }
         frame.addLog(log);
+    }
+
+    private static IllegalStateException staticChange(String change) {
+        return new IllegalStateException("A static call to the bridge attempted a " + change);
     }
 
     private WorldUpdater world() {
