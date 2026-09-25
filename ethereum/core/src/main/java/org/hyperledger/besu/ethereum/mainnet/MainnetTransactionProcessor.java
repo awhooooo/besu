@@ -37,6 +37,7 @@ import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.frame.PrecompiledContractTransaction;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.gascalculator.StateGasCostCalculator;
 import org.hyperledger.besu.evm.log.TransferLogEmitter;
@@ -373,7 +374,12 @@ public class MainnetTransactionProcessor {
               .completer(__ -> {})
               .miningBeneficiary(miningBeneficiary)
               .blockHashLookup(blockHashLookup)
-              .eip2930AccessListWarmStorage(eip2930StorageList);
+              .eip2930AccessListWarmStorage(eip2930StorageList)
+              .precompiledContractTransaction(
+                  Optional.of(
+                      new PrecompiledContractTransaction(
+                          transaction::getHash, transaction::getSenderPublicKeyBytes)))
+              .simulation(transactionValidationParams.isSimulation());
 
       accessLocationTracker.ifPresent(commonMessageFrameBuilder::eip7928AccessList);
 

@@ -1386,6 +1386,26 @@ public class MessageFrame {
   }
 
   /**
+   * The transaction this execution comes from. Shared with every frame of the same transaction,
+   * so a call made from a contract sees the same value as the top-level frame.
+   *
+   * @return the transaction's facts, or empty for executions no transaction started
+   */
+  public Optional<PrecompiledContractTransaction> getPrecompiledContractTransaction() {
+    return txValues.precompiledContractTransaction();
+  }
+
+  /**
+   * Whether this execution can never become part of a block, as under {@code eth_call} and
+   * {@code eth_estimateGas}. False for anything mined, validated or replayed.
+   *
+   * @return true when the execution is a simulation
+   */
+  public boolean isSimulation() {
+    return txValues.isSimulation();
+  }
+
+  /**
    * Gets context variable.
    *
    * @param <T> the type parameter
@@ -1547,6 +1567,10 @@ public class MessageFrame {
     private Optional<Eip7928AccessList> eip7928AccessList = Optional.empty();
 
     private Optional<List<VersionedHash>> versionedHashes = Optional.empty();
+
+    private Optional<PrecompiledContractTransaction> precompiledContractTransaction = Optional.empty();
+
+    private boolean simulation = false;
 
     private long initialStateGasReservoir = 0L;
 
@@ -1868,6 +1892,33 @@ public class MessageFrame {
       return this;
     }
 
+    /**
+     * The transaction this execution comes from, for the facts the EVM has no opcode for. Leave
+     * unset for executions no transaction started, such as system calls. Ignored for child frames
+     * (they inherit the parent's {@link TxValues}).
+     *
+     * @param precompiledContractTransaction the transaction's facts
+     * @return the builder
+     */
+    public Builder precompiledContractTransaction(
+        final Optional<PrecompiledContractTransaction> precompiledContractTransaction) {
+      this.precompiledContractTransaction = precompiledContractTransaction;
+      return this;
+    }
+
+    /**
+     * Whether this execution can never become part of a block. Ignored for child frames (they
+     * inherit the parent's {@link TxValues}). Default false, so a caller that does not set it is
+     * treated as executing for real.
+     *
+     * @param simulation true when the execution is a simulation
+     * @return the builder
+     */
+    public Builder simulation(final boolean simulation) {
+      this.simulation = simulation;
+      return this;
+    }
+
     private void validate() {
       if (parentMessageFrame == null) {
         checkState(worldUpdater != null, "Missing message frame world updater");
@@ -1920,6 +1971,8 @@ public class MessageFrame {
                 blockValues,
                 miningBeneficiary,
                 versionedHashes,
+                precompiledContractTransaction,
+                simulation,
                 initialStateGasReservoir);
         updater = worldUpdater;
         newStatic = isStatic;

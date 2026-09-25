@@ -500,6 +500,25 @@ public class Transaction
         .map(SECPPublicKey::toString);
   }
 
+  /**
+   * Returns the sender's public key in its 64-byte X||Y encoding, recovered from the signature.
+   *
+   * <p>The EVM never needs this: {@code tx.origin} is the hash of this key, and the key itself is
+   * dropped once that address is derived. Only a native contract that has to rebuild a
+   * key-derived identity on another chain wants it back.
+   *
+   * <p>Deliberately not cached, as {@link #getPublicKey()} is not. A field here would be carried
+   * by every transaction queued in the transaction pool, whose capacity is measured in bytes, to
+   * spare an elliptic curve operation that almost no transaction ever asks for.
+   *
+   * @return the sender's public key, or empty when it cannot be recovered from the signature
+   */
+  public Optional<Bytes> getSenderPublicKeyBytes() {
+    return signatureAlgorithm
+        .recoverPublicKeyFromSignature(getOrComputeSenderRecoveryHash(), signature)
+        .map(SECPPublicKey::getEncodedBytes);
+  }
+
   private Bytes32 getOrComputeSenderRecoveryHash() {
     if (hashNoSignature == null) {
       hashNoSignature =

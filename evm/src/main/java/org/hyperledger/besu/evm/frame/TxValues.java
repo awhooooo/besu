@@ -51,6 +51,8 @@ public class TxValues {
   private final Deque<MessageFrame> messageFrameStack;
   private final Address miningBeneficiary;
   private final Optional<List<VersionedHash>> versionedHashes;
+  private final Optional<PrecompiledContractTransaction> precompiledContractTransaction;
+  private final boolean simulation;
   private final UndoTable<Address, Bytes32, Bytes32> transientStorage;
   private final UndoSet<Address> creates;
   private final UndoSet<Address> selfDestructs;
@@ -70,6 +72,8 @@ public class TxValues {
       final Deque<MessageFrame> messageFrameStack,
       final Address miningBeneficiary,
       final Optional<List<VersionedHash>> versionedHashes,
+      final Optional<PrecompiledContractTransaction> precompiledContractTransaction,
+      final boolean simulation,
       final UndoTable<Address, Bytes32, Bytes32> transientStorage,
       final UndoSet<Address> creates,
       final UndoSet<Address> selfDestructs,
@@ -87,6 +91,8 @@ public class TxValues {
     this.messageFrameStack = messageFrameStack;
     this.miningBeneficiary = miningBeneficiary;
     this.versionedHashes = versionedHashes;
+    this.precompiledContractTransaction = precompiledContractTransaction;
+    this.simulation = simulation;
     this.transientStorage = transientStorage;
     this.creates = creates;
     this.selfDestructs = selfDestructs;
@@ -109,6 +115,8 @@ public class TxValues {
    * @param blockValues the block values
    * @param miningBeneficiary the mining beneficiary
    * @param versionedHashes optional versioned hashes
+   * @param precompiledContractTransaction the transaction this execution comes from, when there is one
+   * @param simulation whether this execution can never become part of a block
    * @param initialStateGasReservoir state-gas reservoir balance at frame entry
    * @return a new TxValues instance
    */
@@ -122,6 +130,8 @@ public class TxValues {
       final BlockValues blockValues,
       final Address miningBeneficiary,
       final Optional<List<VersionedHash>> versionedHashes,
+      final Optional<PrecompiledContractTransaction> precompiledContractTransaction,
+      final boolean simulation,
       final long initialStateGasReservoir) {
     // TreeBasedTable/TreeSet (sorted by each key's natural ordering) are used instead of
     // HashBasedTable/HashSet: Address and Bytes32 hash with a grindable base-31 hash and never
@@ -139,6 +149,8 @@ public class TxValues {
         new ArrayDeque<>(),
         miningBeneficiary,
         versionedHashes,
+        precompiledContractTransaction,
+        simulation,
         UndoTable.of(TreeBasedTable.create()),
         UndoSet.of(new TreeSet<>()),
         UndoSet.of(new TreeSet<>()),
@@ -260,6 +272,25 @@ public class TxValues {
    */
   public Optional<List<VersionedHash>> versionedHashes() {
     return versionedHashes;
+  }
+
+  /**
+   * Returns what a precompiled contract may know about the transaction being executed.
+   *
+   * @return the transaction's facts, or empty for executions no transaction started
+   */
+  public Optional<PrecompiledContractTransaction> precompiledContractTransaction() {
+    return precompiledContractTransaction;
+  }
+
+  /**
+   * Whether this execution can never become part of a block, as under {@code eth_call} and
+   * {@code eth_estimateGas}. False for anything mined, validated or replayed.
+   *
+   * @return true when the execution is a simulation
+   */
+  public boolean isSimulation() {
+    return simulation;
   }
 
   /**

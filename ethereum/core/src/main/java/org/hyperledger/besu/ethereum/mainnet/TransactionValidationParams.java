@@ -35,31 +35,38 @@ public interface TransactionValidationParams {
           false, false, false, false, false, false, false, false);
 
   TransactionValidationParams transactionSimulatorParams =
-      ImmutableTransactionValidationParams.of(false, false, false, false, false, true, true, false);
+      ImmutableTransactionValidationParams.of(false, false, false, false, false, true, true, false)
+          .withIsSimulation(true);
 
   TransactionValidationParams transactionSimulatorParamsAllowFutureNonce =
-      ImmutableTransactionValidationParams.of(true, false, false, false, false, true, true, false);
+      ImmutableTransactionValidationParams.of(true, false, false, false, false, true, true, false)
+          .withIsSimulation(true);
 
   TransactionValidationParams transactionSimulatorAllowUnderpricedAndFutureNonceParams =
-      ImmutableTransactionValidationParams.of(true, false, true, false, false, true, true, false);
+      ImmutableTransactionValidationParams.of(true, false, true, false, false, true, true, false)
+          .withIsSimulation(true);
 
   TransactionValidationParams transactionSimulatorAllowExceedingBalanceParams =
-      ImmutableTransactionValidationParams.of(false, true, false, false, false, true, true, false);
+      ImmutableTransactionValidationParams.of(false, true, false, false, false, true, true, false)
+          .withIsSimulation(true);
 
   TransactionValidationParams transactionSimulatorAllowExceedingBalanceAndFutureNonceParams =
-      ImmutableTransactionValidationParams.of(true, true, false, false, false, true, true, false);
+      ImmutableTransactionValidationParams.of(true, true, false, false, false, true, true, false)
+          .withIsSimulation(true);
 
   // eth_simulateV1 non-strict: allows exceeding balance and future nonces, and preserves
   // caller-provided gas pricing so that gas fees are actually charged during simulation.
   TransactionValidationParams blockSimulatorNonStrictParams =
-      ImmutableTransactionValidationParams.of(true, true, false, false, false, true, true, true);
+      ImmutableTransactionValidationParams.of(true, true, false, false, false, true, true, true)
+          .withIsSimulation(true);
 
   // eth_simulateV1 strict: enforces economic rules (balance, nonce, base fee) against the
   // caller's literal values, but does NOT enforce consensus-level transaction caps
   // (EIP-7825, EIP-8037). Those caps govern mempool/block-building for real transactions
   // and are not applicable to simulation.
   TransactionValidationParams blockSimulatorStrictParams =
-      ImmutableTransactionValidationParams.of(false, false, false, false, false, true, true, true);
+      ImmutableTransactionValidationParams.of(false, false, false, false, false, true, true, true)
+          .withIsSimulation(true);
 
   // Block-building simulation strict: same economic rules as blockSimulatorStrictParams, but
   // also enforces consensus-level transaction caps (EIP-7825, EIP-8037) because this path
@@ -110,6 +117,27 @@ public interface TransactionValidationParams {
    */
   @Value.Default
   default boolean isPreserveCallerGasPricing() {
+    return false;
+  }
+
+  /**
+   * When true, this execution can never become part of a block: it is an RPC simulation whose
+   * result is returned to one caller and discarded. Native contracts that the node ships may read
+   * it to allow queries that would be unsafe to serve on chain.
+   *
+   * <p>It must stay false for anything a block can be built from, imported from, or replayed
+   * from, so that such a contract behaves identically wherever a transaction is executed. It is
+   * therefore false by default and false for {@code blockSimulatorConsensusStrictParams}, whose
+   * whole purpose is to reproduce block-production semantics.
+   *
+   * <p>Excluded from the generated {@code of(..)} constructor so that adding it did not renumber
+   * eight positional booleans at every call site.
+   *
+   * @return true when the execution is an RPC simulation
+   */
+  @Value.Default
+  @Value.Parameter(false)
+  default boolean isSimulation() {
     return false;
   }
 

@@ -146,13 +146,14 @@ public class TransactionSimulationServiceImpl implements TransactionSimulationSe
   private static TransactionValidationParams simulationParameters2TransactionValidationParams(
       final EnumSet<SimulationParameters> simulationParameters) {
     return ImmutableTransactionValidationParams.of(
-        simulationParameters.contains(SimulationParameters.ALLOW_FUTURE_NONCE),
-        simulationParameters.contains(SimulationParameters.ALLOW_EXCEEDING_BALANCE),
-        simulationParameters.contains(SimulationParameters.ALLOW_UNDERPRICED),
-        false,
-        false,
-        true,
-        true,
-        false);
+            simulationParameters.contains(SimulationParameters.ALLOW_FUTURE_NONCE),
+            simulationParameters.contains(SimulationParameters.ALLOW_EXCEEDING_BALANCE),
+            simulationParameters.contains(SimulationParameters.ALLOW_UNDERPRICED),
+            false,
+            false,
+            true,
+            true,
+            false)
+        .withIsSimulation(true);
   }
 }
