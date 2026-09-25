@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.mainnet;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import org.hyperledger.besu.config.BlobSchedule;
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.HardforkId;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.BlockValidator;
@@ -37,10 +38,12 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.internal.EvmConfiguration.WorldUpdaterMode;
 import org.hyperledger.besu.evm.precompile.PrecompileContractRegistry;
+import org.hyperledger.besu.evm.precompile.PrecompiledContract;
 import org.hyperledger.besu.evm.processor.ContractCreationProcessor;
 import org.hyperledger.besu.evm.processor.MessageCallProcessor;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -198,6 +201,31 @@ public class ProtocolSpecBuilder {
         precompiledContractConfiguration -> {
           final PrecompileContractRegistry registry =
               precompileContractRegistryBuilder.apply(precompiledContractConfiguration);
+          return registry;
+        };
+    return this;
+  }
+
+  /**
+   * Registers native contracts belonging to this chain rather than to Ethereum, on top of the
+   * milestone's own precompiles. It adds rather than replaces, so every Ethereum precompile stays
+   * where it is, and it must therefore be called after {@link #precompileContractRegistryBuilder}
+   * has supplied them.
+   *
+   * @param additionalPrecompiles the contracts to register, by the address each answers on
+   * @return this builder
+   */
+  public ProtocolSpecBuilder additionalPrecompiles(
+      final Map<Address, PrecompiledContract> additionalPrecompiles) {
+    final Function<PrecompiledContractConfiguration, PrecompileContractRegistry> milestone =
+        checkNotNull(
+            precompileContractRegistryBuilder,
+            "Additional precompiles can only be added once the milestone's own are in place");
+    this.precompileContractRegistryBuilder =
+        precompiledContractConfiguration -> {
+          final PrecompileContractRegistry registry =
+              milestone.apply(precompiledContractConfiguration);
+          additionalPrecompiles.forEach(registry::put);
           return registry;
         };
     return this;

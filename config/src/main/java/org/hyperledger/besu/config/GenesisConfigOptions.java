@@ -413,6 +413,20 @@ public interface GenesisConfigOptions {
   Optional<String> getEcCurve();
 
   /**
+   * The Bitcoin network the PowPeg bridge settles against, one of {@code mainnet}, {@code
+   * testnet} or {@code regtest}. It selects the federation, the authorizer keys and the Bitcoin
+   * parameters the bridge validates headers under, so it is part of consensus and belongs in the
+   * genesis file rather than in node configuration.
+   *
+   * <p>Absent means the chain has no bridge: the precompile is not registered and the address it
+   * would occupy behaves like any other account. Every chain that does not ask for one is
+   * therefore an ordinary Besu chain.
+   *
+   * @return the name of the bridge network, or empty when the chain has no bridge
+   */
+  Optional<String> getBridgeNetwork();
+
+  /**
    * Set a Zero Base Fee network so that free gas can be used with London/EIP-1559. Once the chain
    * has a zero base fee, you cannot go back to a non-zero base fee.
    *

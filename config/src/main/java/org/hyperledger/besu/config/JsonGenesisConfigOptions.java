@@ -47,6 +47,7 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   private static final String QBFT_CONFIG_KEY = "qbft";
   private static final String CLIQUE_CONFIG_KEY = "clique";
   private static final String EC_CURVE_CONFIG_KEY = "eccurve";
+  private static final String BRIDGE_NETWORK_CONFIG_KEY = "bridgenetwork";
   private static final String TRANSITIONS_CONFIG_KEY = "transitions";
   private static final String DISCOVERY_CONFIG_KEY = "discovery";
   private static final String CHECKPOINT_CONFIG_KEY = "checkpoint";
@@ -415,6 +416,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   @Override
   public Optional<String> getEcCurve() {
     return JsonUtil.getString(configRoot, EC_CURVE_CONFIG_KEY);
+  }
+
+  @Override
+  public Optional<String> getBridgeNetwork() {
+    return JsonUtil.getString(configRoot, BRIDGE_NETWORK_CONFIG_KEY);
   }
 
   @Override
