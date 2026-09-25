@@ -427,6 +427,22 @@ public interface GenesisConfigOptions {
   Optional<String> getBridgeNetwork();
 
   /**
+   * The first block at which bridge transactions are paid for like any other.
+   *
+   * <p>Before it, the peg's own operators may send them for nothing, and the bridge asks less of the
+   * peg-in that seeds the chain. At genesis the bridge holds every coin and the federation holds
+   * none, so without such a window the federation cannot afford the transactions that would release
+   * the first coins, and the chain's whole supply stays locked forever.
+   *
+   * <p>Absent, or zero, means no window: bridge transactions are paid for from genesis. That is the
+   * safe reading, since a chain that needed a window and did not ask for one fails visibly at once,
+   * while one that did not need it is given nothing to abuse.
+   *
+   * @return the block at which the bootstrap window closes
+   */
+  OptionalLong getBridgeTxsPaidBlock();
+
+  /**
    * Set a Zero Base Fee network so that free gas can be used with London/EIP-1559. Once the chain
    * has a zero base fee, you cannot go back to a non-zero base fee.
    *

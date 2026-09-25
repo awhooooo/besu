@@ -141,6 +141,25 @@ public interface TransactionValidationParams {
     return false;
   }
 
+  /**
+   * When true, this transaction may be included without meeting the fee floor, and its miner is
+   * paid nothing for it. It is set per transaction, not per call site: only the peg's own operators,
+   * sending valueless transactions to the bridge, and only while a chain is bootstrapping.
+   *
+   * <p>Deliberately not {@code allowUnderpriced}, which would do the same two things and one more:
+   * it also lets the sender's balance underflow. That is harmless for a transaction carrying no
+   * value and disastrous for one that does, and a consensus rule should not rest on the difference.
+   *
+   * <p>Excluded from the generated {@code of(..)} constructor, as {@link #isSimulation()} is.
+   *
+   * @return true when the transaction is exempt from the fee floor
+   */
+  @Value.Default
+  @Value.Parameter(false)
+  default boolean isFeeExempt() {
+    return false;
+  }
+
   static TransactionValidationParams transactionSimulator() {
     return transactionSimulatorParams;
   }

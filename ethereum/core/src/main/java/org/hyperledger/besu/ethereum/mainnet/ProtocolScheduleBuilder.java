@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.config.GenesisConfigOptions;
 import org.hyperledger.besu.datatypes.HardforkId;
+import org.hyperledger.besu.ethereum.bridge.BridgeRegistration;
 import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.milestones.MilestoneDefinition;
@@ -52,6 +53,7 @@ public class ProtocolScheduleBuilder {
   private final BalConfiguration balConfiguration;
   private final MetricsSystem metricsSystem;
   private final MiningConfiguration miningConfiguration;
+  private final Optional<BridgeRegistration> bridge;
 
   public ProtocolScheduleBuilder(
       final GenesisConfigOptions config,
@@ -74,6 +76,7 @@ public class ProtocolScheduleBuilder {
     this.balConfiguration = balConfiguration;
     this.metricsSystem = metricsSystem;
     this.miningConfiguration = miningConfiguration;
+    this.bridge = BridgeRegistration.forGenesis(config);
   }
 
   public ProtocolSchedule createProtocolSchedule() {
@@ -245,7 +248,15 @@ public class ProtocolScheduleBuilder {
       final Function<ProtocolSpecBuilder, ProtocolSpecBuilder> modifier) {
     definition.badBlocksManager(badBlockManager);
 
-    return modifier.apply(definition).build(protocolSchedule);
+    // Every milestone of every consensus engine is built here, so this is the one place the
+    // bridge has to be added. It goes on after the consensus modifier rather than before, so
+    // that a modifier which rebuilt the precompile registry could not drop it again.
+    final ProtocolSpecBuilder modified = modifier.apply(definition);
+    bridge.ifPresent(registration -> registration.register(modified));
+
+    final ProtocolSpec spec = modified.build(protocolSchedule);
+    bridge.ifPresent(registration -> registration.checkMintsNothing(spec));
+    return spec;
   }
 
   private void addProtocolSpec(

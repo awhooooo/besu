@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
+import org.hyperledger.besu.ethereum.bridge.BridgeFeeExemption;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.feemarket.CoinbaseFeePriceCalculator;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.AccessLocationTracker;
@@ -87,6 +88,7 @@ public class MainnetTransactionProcessor {
   private final Optional<CodeDelegationProcessor> maybeCodeDelegationProcessor;
 
   private final TransferLogEmitter transferLogEmitter;
+  private final BridgeFeeExemption bridgeFeeExemption;
 
   private MainnetTransactionProcessor(
       final GasCalculator gasCalculator,
@@ -99,7 +101,8 @@ public class MainnetTransactionProcessor {
       final FeeMarket feeMarket,
       final CoinbaseFeePriceCalculator coinbaseFeePriceCalculator,
       final CodeDelegationProcessor maybeCodeDelegationProcessor,
-      final TransferLogEmitter transferLogEmitter) {
+      final TransferLogEmitter transferLogEmitter,
+      final BridgeFeeExemption bridgeFeeExemption) {
     this.gasCalculator = gasCalculator;
     this.transactionValidatorFactory = transactionValidatorFactory;
     this.contractCreationProcessor = contractCreationProcessor;
@@ -111,6 +114,7 @@ public class MainnetTransactionProcessor {
     this.coinbaseFeePriceCalculator = coinbaseFeePriceCalculator;
     this.maybeCodeDelegationProcessor = Optional.ofNullable(maybeCodeDelegationProcessor);
     this.transferLogEmitter = transferLogEmitter;
+    this.bridgeFeeExemption = bridgeFeeExemption;
   }
 
   /**
@@ -210,12 +214,24 @@ public class MainnetTransactionProcessor {
     try {
       final var transactionValidator = transactionValidatorFactory.get();
       LOG.trace("Starting execution of {}", transaction);
+
+      // A chain bringing its peg to life lets its peg operators send valueless bridge transactions
+      // without meeting the fee floor, because at genesis they hold nothing to pay it with. Decided
+      // once, here, so that validation and execution cannot disagree about it.
+      final TransactionValidationParams validationParams =
+          bridgeFeeExemption.covers(transaction, blockHeader.getNumber())
+              ? ImmutableTransactionValidationParams.builder()
+                  .from(transactionValidationParams)
+                  .isFeeExempt(true)
+                  .build()
+              : transactionValidationParams;
+
       ValidationResult<TransactionInvalidReason> validationResult =
           transactionValidator.validate(
               transaction,
               blockHeader.getBaseFee(),
               Optional.ofNullable(blobGasPrice),
-              transactionValidationParams);
+              validationParams);
       // Make sure the transaction is intrinsically valid before trying to
       // compare against a sender account (because the transaction may not
       // be signed correctly to extract the sender).
@@ -229,7 +245,7 @@ public class MainnetTransactionProcessor {
       accessLocationTracker.ifPresent(t -> t.addTouchedAccount(senderAddress));
 
       validationResult =
-          transactionValidator.validateForSender(transaction, sender, transactionValidationParams);
+          transactionValidator.validateForSender(transaction, sender, validationParams);
       if (!validationResult.isValid()) {
         LOG.debug("Invalid transaction: {}", validationResult.getErrorMessage());
         return TransactionProcessingResult.invalid(validationResult);
@@ -572,8 +588,11 @@ public class MainnetTransactionProcessor {
       if (blockHeader.getBaseFee().isPresent()) {
         final Wei baseFee = blockHeader.getBaseFee().get();
         final boolean gasPriceBelowBaseFee = transactionGasPrice.compareTo(baseFee) < 0;
-        if (transactionValidationParams.allowUnderpriced()
-            || transactionValidationParams.isPreserveCallerGasPricing()) {
+        if (validationParams.allowUnderpriced()
+            || validationParams.isPreserveCallerGasPricing()
+            || validationParams.isFeeExempt()) {
+          // An exempt transaction pays no fee, so its miner is paid nothing for it. Nothing is
+          // burned either: the sender was charged nothing to begin with.
           coinbaseCalculator =
               gasPriceBelowBaseFee ? (a, b, c) -> Wei.ZERO : coinbaseFeePriceCalculator;
         } else {
@@ -1041,6 +1060,18 @@ public class MainnetTransactionProcessor {
     return target.code();
   }
 
+  /**
+   * Who may send bridge transactions for nothing while this chain bootstraps.
+   *
+   * <p>The transaction pool needs the same answer this processor will give, so that it does not
+   * turn away at the door a transaction that would be perfectly valid in a block.
+   *
+   * @return the exemption, which exempts nothing unless the chain asked for a window
+   */
+  public BridgeFeeExemption getBridgeFeeExemption() {
+    return bridgeFeeExemption;
+  }
+
   public static Builder builder() {
     return new Builder();
   }
@@ -1057,6 +1088,7 @@ public class MainnetTransactionProcessor {
     private CoinbaseFeePriceCalculator coinbaseFeePriceCalculator;
     private CodeDelegationProcessor codeDelegationProcessor;
     private TransferLogEmitter transferLogEmitter = TransferLogEmitter.NOOP;
+    private BridgeFeeExemption bridgeFeeExemption = BridgeFeeExemption.NONE;
 
     public Builder gasCalculator(final GasCalculator gasCalculator) {
       this.gasCalculator = gasCalculator;
@@ -1117,6 +1149,18 @@ public class MainnetTransactionProcessor {
       return this;
     }
 
+    /**
+     * Who may send bridge transactions for nothing while a chain bootstraps. Exempts nobody
+     * unless set, so a chain that did not ask for a window cannot accidentally have one.
+     *
+     * @param bridgeFeeExemption the exemption to apply
+     * @return this builder
+     */
+    public Builder bridgeFeeExemption(final BridgeFeeExemption bridgeFeeExemption) {
+      this.bridgeFeeExemption = bridgeFeeExemption;
+      return this;
+    }
+
     public Builder populateFrom(final MainnetTransactionProcessor processor) {
       this.gasCalculator = processor.gasCalculator;
       this.transactionValidatorFactory = processor.transactionValidatorFactory;
@@ -1129,6 +1173,7 @@ public class MainnetTransactionProcessor {
       this.coinbaseFeePriceCalculator = processor.coinbaseFeePriceCalculator;
       this.codeDelegationProcessor = processor.maybeCodeDelegationProcessor.orElse(null);
       this.transferLogEmitter = processor.transferLogEmitter;
+      this.bridgeFeeExemption = processor.bridgeFeeExemption;
       return this;
     }
 
@@ -1144,7 +1189,8 @@ public class MainnetTransactionProcessor {
           feeMarket,
           coinbaseFeePriceCalculator,
           codeDelegationProcessor,
-          transferLogEmitter);
+          transferLogEmitter,
+          bridgeFeeExemption);
     }
   }
 }

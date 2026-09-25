@@ -61,6 +61,7 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.bridge.BridgeFeeExemption;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.core.feemarket.CoinbaseFeePriceCalculator;
@@ -159,6 +160,25 @@ public abstract class MainnetProtocolSpecs {
 
   private MainnetProtocolSpecs() {}
 
+  /**
+   * Who receives the base fee.
+   *
+   * <p>A chain with a bridge may not burn it. Its coins are backed one for one by bitcoin the
+   * federation holds, and a coin burned is bitcoin that nobody can ever redeem, so the supply would
+   * drift below its backing with every block. Charge the base fee exactly as EIP-1559 does, so that
+   * it still prices congestion and still turns transactions away, and pay it to the validator rather
+   * than to nobody.
+   *
+   * @param genesisConfigOptions the genesis configuration
+   * @return the calculator to pay the coinbase with
+   */
+  private static CoinbaseFeePriceCalculator coinbaseFees(
+      final GenesisConfigOptions genesisConfigOptions) {
+    return genesisConfigOptions.getBridgeNetwork().isPresent()
+        ? CoinbaseFeePriceCalculator.frontier()
+        : CoinbaseFeePriceCalculator.eip1559();
+  }
+
   public static ProtocolSpecBuilder frontierDefinition(
       final GenesisConfigOptions genesisConfigOptions,
       final EvmConfiguration evmConfiguration,
@@ -196,6 +216,7 @@ public abstract class MainnetProtocolSpecs {
                     .maxStackSize(evmConfiguration.evmStackSize())
                     .feeMarket(FeeMarket.legacy())
                     .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.frontier())
+                    .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                     .build())
         .difficultyCalculator(MainnetDifficultyCalculators.FRONTIER)
         .blockHeaderValidatorBuilder(
@@ -401,6 +422,7 @@ public abstract class MainnetProtocolSpecs {
                     .maxStackSize(evmConfiguration.evmStackSize())
                     .feeMarket(feeMarket)
                     .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.frontier())
+                    .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                     .build())
         .hardforkId(SPURIOUS_DRAGON);
   }
@@ -616,7 +638,8 @@ public abstract class MainnetProtocolSpecs {
                     .warmCoinbase(false)
                     .maxStackSize(evmConfiguration.evmStackSize())
                     .feeMarket(feeMarket)
-                    .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.eip1559())
+                    .coinbaseFeePriceCalculator(coinbaseFees(genesisConfigOptions))
+                    .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                     .build())
         .contractCreationProcessorBuilder(
             evm ->
@@ -758,7 +781,8 @@ public abstract class MainnetProtocolSpecs {
                     .warmCoinbase(true)
                     .maxStackSize(evmConfiguration.evmStackSize())
                     .feeMarket(feeMarket)
-                    .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.eip1559())
+                    .coinbaseFeePriceCalculator(coinbaseFees(genesisConfigOptions))
+                    .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                     .build())
         // Contract creation rules for EIP-3860 Limit and meter intitcode
         .transactionValidatorFactoryBuilder(
@@ -849,7 +873,8 @@ public abstract class MainnetProtocolSpecs {
                     .warmCoinbase(true)
                     .maxStackSize(evmConfiguration.evmStackSize())
                     .feeMarket(feeMarket)
-                    .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.eip1559())
+                    .coinbaseFeePriceCalculator(coinbaseFees(genesisConfigOptions))
+                    .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                     .build())
         // change to check for max blob gas per block for EIP-4844
         .transactionValidatorFactoryBuilder(
@@ -960,7 +985,8 @@ public abstract class MainnetProtocolSpecs {
                         .warmCoinbase(true)
                         .maxStackSize(evmConfiguration.evmStackSize())
                         .feeMarket(feeMarket)
-                        .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.eip1559())
+                        .coinbaseFeePriceCalculator(coinbaseFees(genesisConfigOptions))
+                        .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                         .codeDelegationProcessor(
                             new CodeDelegationProcessor(
                                 chainId,
@@ -1257,7 +1283,8 @@ public abstract class MainnetProtocolSpecs {
                         .warmCoinbase(true)
                         .maxStackSize(evmConfiguration.evmStackSize())
                         .feeMarket(feeMarket)
-                        .coinbaseFeePriceCalculator(CoinbaseFeePriceCalculator.eip1559())
+                        .coinbaseFeePriceCalculator(coinbaseFees(genesisConfigOptions))
+                        .bridgeFeeExemption(BridgeFeeExemption.forGenesis(genesisConfigOptions))
                         .codeDelegationProcessor(
                             new CodeDelegationProcessor(
                                 chainId,

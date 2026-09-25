@@ -69,6 +69,7 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
   private OptionalInt stackSizeLimit = OptionalInt.empty();
   private Optional<String> ecCurve = Optional.empty();
   private Optional<String> bridgeNetwork = Optional.empty();
+  private OptionalLong bridgeTxsPaidBlock = OptionalLong.empty();
   private QbftConfigOptions qbftConfigOptions = JsonQbftConfigOptions.DEFAULT;
   private BftConfigOptions bftConfigOptions = JsonBftConfigOptions.DEFAULT;
   private TransitionsConfigOptions transitions = TransitionsConfigOptions.DEFAULT;
@@ -398,6 +399,11 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
   @Override
   public Optional<String> getBridgeNetwork() {
     return bridgeNetwork;
+  }
+
+  @Override
+  public OptionalLong getBridgeTxsPaidBlock() {
+    return bridgeTxsPaidBlock;
   }
 
   @Override
@@ -857,6 +863,17 @@ public class StubGenesisConfigOptions implements GenesisConfigOptions, Cloneable
    */
   public StubGenesisConfigOptions bridgeNetwork(final Optional<String> bridgeNetwork) {
     this.bridgeNetwork = bridgeNetwork;
+    return this;
+  }
+
+  /**
+   * The block at which the bootstrap window closes.
+   *
+   * @param blockNumber the first block at which bridge transactions are paid for
+   * @return the stub genesis config options
+   */
+  public StubGenesisConfigOptions bridgeTxsPaidBlock(final long blockNumber) {
+    this.bridgeTxsPaidBlock = OptionalLong.of(blockNumber);
     return this;
   }
 

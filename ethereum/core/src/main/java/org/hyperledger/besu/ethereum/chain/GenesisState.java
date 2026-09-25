@@ -18,6 +18,7 @@ import static java.util.Collections.emptyList;
 import static org.hyperledger.besu.ethereum.trie.common.GenesisWorldStateProvider.createGenesisWorldState;
 
 import org.hyperledger.besu.config.GenesisAccount;
+import org.hyperledger.besu.ethereum.bridge.BridgeRegistration;
 import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BlobGas;
@@ -123,6 +124,7 @@ public final class GenesisState {
       final GenesisConfig genesisConfig,
       final ProtocolSchedule protocolSchedule,
       final PathBasedCodeCache codeCache) {
+    BridgeRegistration.checkGenesisSupply(genesisConfig);
     final var genesisStateRoot =
         calculateGenesisStateRoot(dataStorageConfiguration, genesisConfig, codeCache);
     final Block block =

@@ -31,6 +31,7 @@ import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.ProtocolContext;
+import org.hyperledger.besu.ethereum.bridge.BridgeFeeExemption;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
@@ -41,6 +42,8 @@ import org.hyperledger.besu.ethereum.core.kzg.BlobProofBundle;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
+import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidator;
@@ -445,10 +448,14 @@ public class TransactionPool implements BlockAddedObserver {
       return ValidationResultAndAccount.invalid(EXCEEDS_MAX_TX_BYTES);
     }
 
-    final FeeMarket feeMarket =
-        protocolSchedule.getByBlockHeader(chainHeadBlockHeader).getFeeMarket();
+    final var chainHeadSpec = protocolSchedule.getByBlockHeader(chainHeadBlockHeader);
+    final FeeMarket feeMarket = chainHeadSpec.getFeeMarket();
+    // A bridge transaction the chain will accept for nothing must not be turned away here for
+    // being below this node's own minimum: the pool would then be the reason the peg never starts.
+    final boolean feeExempt =
+        bridgeFeeExemption(chainHeadSpec).covers(transaction, chainHeadBlockHeader.getNumber() + 1);
     final TransactionInvalidReason priceInvalidReason =
-        validatePrice(transaction, isLocal, hasPriority, feeMarket);
+        validatePrice(transaction, isLocal, hasPriority, feeExempt, feeMarket);
     if (priceInvalidReason != null) {
       return ValidationResultAndAccount.invalid(priceInvalidReason);
     }
@@ -525,10 +532,26 @@ public class TransactionPool implements BlockAddedObserver {
     }
   }
 
+  /**
+   * What this chain exempts from the fee floor, or nothing at all.
+   *
+   * <p>A spec without a transaction processor is not a chain with a bridge: it is a spec that was
+   * never built to execute anything. Reading nothing out of it is the right answer rather than a
+   * reason to reject a transaction.
+   *
+   * @param spec the spec at the chain head
+   * @return the exemption to apply
+   */
+  private static BridgeFeeExemption bridgeFeeExemption(final ProtocolSpec spec) {
+    final MainnetTransactionProcessor processor = spec.getTransactionProcessor();
+    return processor == null ? BridgeFeeExemption.NONE : processor.getBridgeFeeExemption();
+  }
+
   private TransactionInvalidReason validatePrice(
       final Transaction transaction,
       final boolean isLocal,
       final boolean hasPriority,
+      final boolean feeExempt,
       final FeeMarket feeMarket) {
 
     if (isLocal) {
@@ -542,6 +565,10 @@ public class TransactionPool implements BlockAddedObserver {
       if (getMaxGasPrice(transaction).get().greaterThan(configuration.getP2pTxFeeCap())) {
         return TransactionInvalidReason.TX_FEECAP_EXCEEDED;
       }
+    }
+    if (feeExempt) {
+      // The chain itself charges this transaction nothing, so there is no floor to be below.
+      return null;
     }
     if (hasPriority) {
       // allow priority transactions to be below minGas as long as the gas price is above the
