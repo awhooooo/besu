@@ -8,6 +8,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.frame.PrecompiledContractTransaction;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.Arrays;
@@ -20,21 +21,21 @@ import org.apache.tuweni.units.bigints.UInt256;
 /**
  * The bridge's view of a Besu message frame.
  *
- * <p>Three facts are not part of a frame and arrive as context variables that the node attaches when it
- * builds the frame: the transaction hash, whether the execution is a simulation, and the origin's public
- * key. The first two are mandatory for the bridge to run; asking for them when absent fails loudly rather
- * than letting a mis-wired node store zero hashes into consensus state.
+ * <p>Three facts the EVM has no opcode for reach the bridge on the frame's transaction-lifetime values,
+ * which every frame of a transaction shares: the transaction hash, the origin's public key and whether
+ * the execution is a simulation. Sharing matters, because a bridge call made from a contract runs in a
+ * child frame and has to see the same values as a call made directly.
+ *
+ * <p>An execution that no transaction started has no hash to offer. That cannot happen to the bridge,
+ * which no system call reaches, so asking fails loudly rather than letting a mis-wired node store zero
+ * hashes into consensus state. A simulation, by contrast, is a plain false when nobody says otherwise:
+ * a host that forgets the flag then refuses the local-only queries, which is the safe way to be wrong.
  *
  * <p>Besu enforces {@code STATICCALL} inside the opcodes, so a precompile polices itself: on a static frame
  * the host refuses a storage change, a transfer and a log. Writing a value that is already there is not a
  * change, so read-only bridge methods that re-save unchanged state keep working under a static call.
  */
 public final class FrameBridgeHost implements BridgeHost {
-
-    public static final String TRANSACTION_HASH = "bridge.transactionHash";
-    public static final String LOCAL_CALL = "bridge.localCall";
-    /** 64-byte X||Y encoding, as Besu's Transaction.getPublicKey provides it. */
-    public static final String ORIGIN_PUBLIC_KEY = "bridge.originPublicKey";
 
     private static final byte UNCOMPRESSED_PREFIX = 0x04;
 
@@ -66,11 +67,9 @@ public final class FrameBridgeHost implements BridgeHost {
 
     @Override
     public Hash transactionHash() {
-        Hash hash = frame.getContextVariable(TRANSACTION_HASH);
-        if (hash == null) {
-            throw new IllegalStateException("The node did not attach the transaction hash to the bridge call");
-        }
-        return hash;
+        return frame.getPrecompiledContractTransaction()
+            .orElseThrow(() -> new IllegalStateException("The bridge was called outside of a transaction"))
+            .hash();
     }
 
     @Override
@@ -93,11 +92,7 @@ public final class FrameBridgeHost implements BridgeHost {
 
     @Override
     public boolean isLocalCall() {
-        Boolean local = frame.getContextVariable(LOCAL_CALL);
-        if (local == null) {
-            throw new IllegalStateException("The node did not attach the local-call flag to the bridge call");
-        }
-        return local;
+        return frame.isSimulation();
     }
 
     @Override
@@ -105,13 +100,12 @@ public final class FrameBridgeHost implements BridgeHost {
         return frame.getDepth() > 0;
     }
 
+    /** The node hands over the 64-byte X||Y form; the bridge works in uncompressed SEC, which prefixes 0x04. */
     @Override
     public Optional<byte[]> originPublicKey() {
-        Bytes xy = frame.getContextVariable(ORIGIN_PUBLIC_KEY);
-        if (xy == null) {
-            return Optional.empty();
-        }
-        return Optional.of(Bytes.concatenate(Bytes.of(UNCOMPRESSED_PREFIX), xy).toArrayUnsafe());
+        return frame.getPrecompiledContractTransaction()
+            .flatMap(PrecompiledContractTransaction::senderPublicKey)
+            .map(xy -> Bytes.concatenate(Bytes.of(UNCOMPRESSED_PREFIX), xy).toArrayUnsafe());
     }
 
     @Override

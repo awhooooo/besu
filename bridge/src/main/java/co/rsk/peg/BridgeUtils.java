@@ -26,14 +26,10 @@ import co.rsk.bitcoinj.crypto.TransactionSignature;
 import co.rsk.bitcoinj.script.*;
 import co.rsk.bitcoinj.wallet.Wallet;
 import co.rsk.peg.bitcoin.BitcoinUtils;
-import co.rsk.peg.constants.BridgeConstants;
 import co.rsk.peg.bitcoin.RskAllowUnconfirmedCoinSelector;
 import co.rsk.peg.federation.Federation;
 import co.rsk.peg.federation.FederationFormatVersion;
-import co.rsk.peg.federation.constants.FederationConstants;
-import co.rsk.peg.feeperkb.constants.FeePerKbConstants;
 import co.rsk.peg.utils.BtcTransactionFormatUtils;
-import co.rsk.peg.vote.AddressBasedAuthorizer;
 import co.rsk.peg.host.CallContext;
 import co.rsk.bitcoinj.core.BtcECKey;
 import org.apache.tuweni.bytes.Bytes;
@@ -276,15 +272,6 @@ public final class BridgeUtils {
         return BtcECKey.fromPublicOnly(pubKey).toAddress(networkParameters);
     }
 
-    /** True for the addresses RSKj allowed to send bridge transactions for free during bootstrap. Used by the node-side rule. */
-    public static boolean isFromAuthorizedSender(org.hyperledger.besu.datatypes.Address sender, BridgeConstants bridgeConstants) {
-        FeePerKbConstants feePerKbConstants = bridgeConstants.getFeePerKbConstants();
-        FederationConstants federationConstants = bridgeConstants.getFederationConstants();
-
-        return isFromFederationChangeAuthorizedSender(sender, federationConstants) ||
-            isFromFeePerKbChangeAuthorizedSender(sender, feePerKbConstants);
-    }
-
     public static boolean isFromFederateMember(CallContext rskTx, Federation federation) {
         return federation.hasMemberWithRskAddress(rskTx.getSender().getBytes().toArrayUnsafe());
     }
@@ -310,16 +297,6 @@ public final class BridgeUtils {
         } catch(ArithmeticException e) {
             throw new BridgeIllegalArgumentException(e.getMessage(), e);
         }
-    }
-
-    private static boolean isFromFederationChangeAuthorizedSender(org.hyperledger.besu.datatypes.Address sender, FederationConstants federationConstants) {
-        AddressBasedAuthorizer authorizer = federationConstants.getFederationChangeAuthorizer();
-        return authorizer.isAuthorized(sender);
-    }
-
-    private static boolean isFromFeePerKbChangeAuthorizedSender(org.hyperledger.besu.datatypes.Address sender, FeePerKbConstants feePerKbConstants) {
-        AddressBasedAuthorizer authorizer = feePerKbConstants.getFeePerKbChangeAuthorizer();
-        return authorizer.isAuthorized(sender);
     }
 
     public static boolean validateHeightAndConfirmations(int height, int btcBestChainHeight, int acceptableConfirmationsAmount, Sha256Hash btcTxHash) throws Exception {
