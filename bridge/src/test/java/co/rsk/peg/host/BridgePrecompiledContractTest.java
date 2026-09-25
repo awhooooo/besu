@@ -1,6 +1,7 @@
 package co.rsk.peg.host;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -42,6 +43,7 @@ import org.hyperledger.besu.evm.MainnetEVMs;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.frame.PrecompiledContractTransaction;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.precompile.PrecompileContractRegistry;
 import org.hyperledger.besu.evm.processor.MessageCallProcessor;
@@ -57,9 +59,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.stream.Stream;
@@ -185,7 +185,7 @@ class BridgePrecompiledContractTest {
     void releaseBtcMovesTheValueQueuesTheRequestAndLogsIt() {
         fund(world, SENDER, ONE_BTC.multiply(2));
 
-        MessageFrame frame = new Call().value(ONE_BTC).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
+        MessageFrame frame = new Call().value(ONE_BTC).publicKey(SENDER_PUBLIC_KEY_XY).run();
 
         assertEquals(MessageFrame.State.COMPLETED_SUCCESS, frame.getState());
         assertEquals(23_000, INITIAL_GAS - frame.getRemainingGas());
@@ -213,7 +213,7 @@ class BridgePrecompiledContractTest {
         fund(world, SENDER, ONE_BTC);
         Wei value = Weis.fromSatoshis(Coin.valueOf(1_000)); // the regtest minimum is 250 000 satoshis
 
-        MessageFrame frame = new Call().value(value).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
+        MessageFrame frame = new Call().value(value).publicKey(SENDER_PUBLIC_KEY_XY).run();
 
         assertEquals(MessageFrame.State.COMPLETED_SUCCESS, frame.getState());
         assertEquals(Wei.ZERO, balance(world, BridgeAddresses.BRIDGE));
@@ -293,14 +293,53 @@ class BridgePrecompiledContractTest {
     }
 
     @Test
-    void aFrameWithoutTheNodeContextFailsBeforeExecuting() {
+    void aFrameWithoutATransactionBehindItFailsBeforeExecuting() {
         Bytes input = BridgeMethods.GET_FEDERATION_SIZE.getFunction().encode();
 
-        Call withoutHash = new Call().input(input).local(true).context(FrameBridgeHost.TRANSACTION_HASH, null);
-        assertThrows(IllegalStateException.class, withoutHash::run);
+        Call withoutTransaction = new Call().input(input).local(true).noTransaction();
+        assertThrows(IllegalStateException.class, withoutTransaction::run);
+    }
 
-        Call withoutLocalFlag = new Call().input(input).context(FrameBridgeHost.LOCAL_CALL, null);
-        assertThrows(IllegalStateException.class, withoutLocalFlag::run);
+    @Test
+    void aBridgeCallMadeFromAContractSeesTheSameTransaction() {
+        // The facts the node attaches ride on the frame's transaction-lifetime values, which a child
+        // frame inherits from its parent. Were they attached per frame, every one of them would be
+        // missing the moment a contract, rather than an account, called the bridge.
+        Bytes input = BridgeMethods.GET_FEDERATION_SIZE.getFunction().encode();
+        MessageFrame caller = new Call().local(true).publicKey(SENDER_PUBLIC_KEY_XY).frame();
+
+        MessageFrame nested = MessageFrame.builder()
+            .parentMessageFrame(caller)
+            .type(MessageFrame.Type.MESSAGE_CALL)
+            .initialGas(INITIAL_GAS)
+            .address(BridgeAddresses.BRIDGE)
+            .contract(BridgeAddresses.BRIDGE)
+            .inputData(input)
+            .sender(SENDER)
+            .value(Wei.ZERO)
+            .apparentValue(Wei.ZERO)
+            .code(Code.EMPTY_CODE)
+            .completer(completed -> {})
+            .build();
+
+        FrameBridgeHost host = new FrameBridgeHost(nested);
+        assertTrue(host.callerIsContract());
+        assertEquals(TX_HASH, host.transactionHash());
+        assertTrue(host.isLocalCall());
+        assertArrayEquals(
+            PublicKeys.uncompressed(SENDER_KEY), host.originPublicKey().orElseThrow());
+
+        processor.process(nested, OperationTracer.NO_TRACING);
+        assertEquals(MessageFrame.State.COMPLETED_SUCCESS, nested.getState());
+    }
+
+    @Test
+    void anExecutionIsOnlyLocalWhenTheNodeSaysSo() {
+        // getFederationSize answers a local call and nothing else, so the flag alone decides whether it runs.
+        Bytes input = BridgeMethods.GET_FEDERATION_SIZE.getFunction().encode();
+
+        assertEquals(MessageFrame.State.COMPLETED_FAILED, new Call().input(input).run().getState());
+        assertEquals(MessageFrame.State.COMPLETED_SUCCESS, new Call().input(input).local(true).run().getState());
     }
 
     @Test
@@ -342,7 +381,7 @@ class BridgePrecompiledContractTest {
             }
         }
 
-        MessageFrame release = new Call().world(own).value(ONE_BTC).context(FrameBridgeHost.ORIGIN_PUBLIC_KEY, SENDER_PUBLIC_KEY_XY).run();
+        MessageFrame release = new Call().world(own).value(ONE_BTC).publicKey(SENDER_PUBLIC_KEY_XY).run();
         assertEquals(MessageFrame.State.COMPLETED_SUCCESS, release.getState());
         assertEquals(1, release.getLogs().size());
         assertEquals(1, storageProvider(own).getReleaseRequestQueue().getEntries().size());
@@ -387,12 +426,9 @@ class BridgePrecompiledContractTest {
         private Wei value = Wei.ZERO;
         private Address sender = SENDER;
         private boolean isStatic;
-        private final Map<String, Object> context = new HashMap<>();
-
-        Call() {
-            context.put(FrameBridgeHost.TRANSACTION_HASH, TX_HASH);
-            context.put(FrameBridgeHost.LOCAL_CALL, false);
-        }
+        private boolean local;
+        private Bytes publicKey;
+        private boolean hasTransaction = true;
 
         Call world(MutableWorldState world) {
             this.target = world;
@@ -420,7 +456,7 @@ class BridgePrecompiledContractTest {
         }
 
         Call local(boolean local) {
-            context.put(FrameBridgeHost.LOCAL_CALL, local);
+            this.local = local;
             return this;
         }
 
@@ -429,12 +465,14 @@ class BridgePrecompiledContractTest {
             return this;
         }
 
-        Call context(String name, Object variable) {
-            if (variable == null) {
-                context.remove(name);
-            } else {
-                context.put(name, variable);
-            }
+        Call publicKey(Bytes xy) {
+            this.publicKey = xy;
+            return this;
+        }
+
+        /** An execution no transaction started, as a system call is. */
+        Call noTransaction() {
+            this.hasTransaction = false;
             return this;
         }
 
@@ -465,7 +503,11 @@ class BridgePrecompiledContractTest {
                 .blockHashLookup((messageFrame, number) -> Hash.ZERO)
                 .maxStackSize(MessageFrame.DEFAULT_MAX_STACK_SIZE)
                 .isStatic(isStatic)
-                .contextVariables(context)
+                .precompiledContractTransaction(
+                    hasTransaction
+                        ? Optional.of(new PrecompiledContractTransaction(() -> TX_HASH, () -> Optional.ofNullable(publicKey)))
+                        : Optional.empty())
+                .simulation(local)
                 .build();
         }
     }

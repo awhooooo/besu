@@ -23,11 +23,13 @@ import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.MessageFrameTestFixture;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.frame.PrecompiledContractTransaction;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -60,8 +62,9 @@ class FrameBridgeHostTest {
         assertEquals(CallKind.CALL, host.callKind());
         assertFalse(host.callerIsContract());
         assertTrue(host.originPublicKey().isEmpty());
+        // No transaction behind this frame: no hash to give, and not a simulation either.
         assertThrows(IllegalStateException.class, host::transactionHash);
-        assertThrows(IllegalStateException.class, host::isLocalCall);
+        assertFalse(host.isLocalCall());
 
         Bytes32 key = Bytes32.leftPad(Bytes.of((byte) 1));
         byte[] value = new byte[70];
@@ -165,16 +168,16 @@ class FrameBridgeHostTest {
     }
 
     @Test
-    void readsNodeSuppliedContextVariables() {
+    void readsTheFactsTheEvmHasNoOpcodeFor() {
         Hash hash = Hash.fromHexString("0x2222222222222222222222222222222222222222222222222222222222222222");
         byte[] xy = new byte[64];
         for (int i = 0; i < xy.length; i++) {
             xy[i] = (byte) (i + 1);
         }
         MessageFrame frame = mock(MessageFrame.class);
-        when(frame.<Hash>getContextVariable(FrameBridgeHost.TRANSACTION_HASH)).thenReturn(hash);
-        when(frame.<Boolean>getContextVariable(FrameBridgeHost.LOCAL_CALL)).thenReturn(true);
-        when(frame.<Bytes>getContextVariable(FrameBridgeHost.ORIGIN_PUBLIC_KEY)).thenReturn(Bytes.wrap(xy));
+        when(frame.getPrecompiledContractTransaction()).thenReturn(
+            Optional.of(new PrecompiledContractTransaction(() -> hash, () -> Optional.of(Bytes.wrap(xy)))));
+        when(frame.isSimulation()).thenReturn(true);
         FrameBridgeHost host = new FrameBridgeHost(frame);
 
         assertEquals(hash, host.transactionHash());
@@ -183,5 +186,26 @@ class FrameBridgeHostTest {
         assertEquals(65, key.length);
         assertEquals(0x04, key[0]);
         assertArrayEquals(xy, java.util.Arrays.copyOfRange(key, 1, 65));
+    }
+
+    @Test
+    void withoutATransactionThereIsNoHashAndNoKey() {
+        MessageFrame frame = mock(MessageFrame.class);
+        when(frame.getPrecompiledContractTransaction()).thenReturn(Optional.empty());
+        FrameBridgeHost host = new FrameBridgeHost(frame);
+
+        assertThrows(IllegalStateException.class, host::transactionHash);
+        assertTrue(host.originPublicKey().isEmpty());
+        // Nobody said this was a simulation, so it is not one: the safe way to be wrong.
+        assertFalse(host.isLocalCall());
+    }
+
+    @Test
+    void aTransactionWhoseKeyCannotBeRecoveredHasNoOriginPublicKey() {
+        MessageFrame frame = mock(MessageFrame.class);
+        when(frame.getPrecompiledContractTransaction()).thenReturn(
+            Optional.of(new PrecompiledContractTransaction(() -> Hash.ZERO, Optional::empty)));
+
+        assertTrue(new FrameBridgeHost(frame).originPublicKey().isEmpty());
     }
 }
