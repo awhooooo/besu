@@ -37,6 +37,8 @@ public abstract class BridgeConstants {
     protected int rsk2BtcMinimumAcceptableConfirmations;
 
     protected Coin minimumPeginTxValue;
+    /** What the peg asks of a peg-in while the chain is still bootstrapping. RSK's value. */
+    protected Coin bootstrapMinimumPeginTxValue = Coin.COIN;
     protected Coin minimumPegoutTxValue;
     protected Coin svpFundTxOutputsValue;
 
@@ -77,6 +79,8 @@ public abstract class BridgeConstants {
     }
 
     public Coin getMinimumPeginTxValue() { return minimumPeginTxValue; }
+
+    public Coin getBootstrapMinimumPeginTxValue() { return bootstrapMinimumPeginTxValue; }
 
     public Coin getMinimumPegoutTxValue() { return minimumPegoutTxValue; }
 

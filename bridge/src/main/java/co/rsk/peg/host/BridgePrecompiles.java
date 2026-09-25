@@ -1,5 +1,6 @@
 package co.rsk.peg.host;
 
+import co.rsk.peg.BootstrapWindow;
 import co.rsk.peg.BridgeAddresses;
 import co.rsk.peg.BridgeSupportFactory;
 import co.rsk.peg.RepositoryBtcBlockStoreWithCache;
@@ -7,11 +8,16 @@ import co.rsk.peg.constants.BridgeConstants;
 import co.rsk.peg.constants.BridgeMainNetConstants;
 import co.rsk.peg.constants.BridgeRegTestConstants;
 import co.rsk.peg.constants.BridgeTestNetConstants;
+import co.rsk.peg.utils.PublicKeys;
+import co.rsk.peg.utils.Weis;
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.precompile.PrecompiledContract;
 
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the bridge as a precompile for a named Bitcoin network.
@@ -34,20 +40,63 @@ public final class BridgePrecompiles {
      * instance would mean a second cache, cold and needlessly filled from storage.
      *
      * @param network mainnet, testnet or regtest, in any case
+     * @param bootstrapWindow the blocks during which the peg is still being brought to life
      * @return the bridge contract, under the address it answers on
      * @throws IllegalArgumentException if no such Bitcoin network exists
      */
-    public static Map<Address, PrecompiledContract> forNetwork(String network) {
+    public static Map<Address, PrecompiledContract> forNetwork(String network, BootstrapWindow bootstrapWindow) {
         BridgeConstants bridgeConstants = constantsFor(network);
         BridgeSupportFactory bridgeSupportFactory = new BridgeSupportFactory(
             new RepositoryBtcBlockStoreWithCache.Factory(bridgeConstants.getBtcParams()),
-            bridgeConstants
+            bridgeConstants,
+            bootstrapWindow
         );
 
         return Map.of(
             BridgeAddresses.BRIDGE,
             new BridgePrecompiledContract(bridgeConstants, bridgeSupportFactory)
         );
+    }
+
+    /**
+     * The addresses that may send bridge transactions for nothing while the chain bootstraps: the
+     * peg's own operators, and nobody else.
+     *
+     * <p>The genesis federation rather than the current one, which is the same thing while the window
+     * is open and is what RSK asked for: once the federation has changed, the chain has plainly
+     * outgrown its bootstrap. The authorizers are here because changing the federation, the fee per
+     * kilobyte or the locking cap can all be needed before the first peg-in can succeed.
+     *
+     * @param network mainnet, testnet or regtest, in any case
+     * @return the addresses, as the node knows them
+     * @throws IllegalArgumentException if no such Bitcoin network exists
+     */
+    public static Set<Address> bootstrapSendersFor(String network) {
+        BridgeConstants bridgeConstants = constantsFor(network);
+        Set<Address> senders = new LinkedHashSet<>();
+
+        bridgeConstants.getFederationConstants().getGenesisFederationPublicKeys()
+            .forEach(key -> senders.add(PublicKeys.addressOf(key)));
+        senders.addAll(bridgeConstants.getFederationConstants().getFederationChangeAuthorizer().getAuthorizedAddresses());
+        senders.addAll(bridgeConstants.getFeePerKbConstants().getFeePerKbChangeAuthorizer().getAuthorizedAddresses());
+        senders.addAll(bridgeConstants.getLockingCapConstants().getIncreaseAuthorizer().getAuthorizedAddresses());
+
+        return Set.copyOf(senders);
+    }
+
+    /**
+     * Every coin the chain will ever have, which the bridge must hold at genesis.
+     *
+     * <p>A coin exists because bitcoin was locked for it. Before any of that has happened the bridge
+     * holds all of them and nobody else holds any, and it hands them out only against proof that the
+     * bitcoin arrived.
+     *
+     * @param network mainnet, testnet or regtest, in any case
+     * @return the total supply, in wei
+     * @throws IllegalArgumentException if no such Bitcoin network exists
+     */
+    public static Wei totalSupplyFor(String network) {
+        return Weis.fromSatoshis(constantsFor(network).getMaxRbtc());
     }
 
     private static BridgeConstants constantsFor(String network) {

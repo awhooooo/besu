@@ -110,6 +110,7 @@ public class BridgeSupport {
 
     private final Context btcContext;
     private final BtcBlockStoreWithCache.Factory btcBlockStoreFactory;
+    private final BootstrapWindow bootstrapWindow;
     private BtcBlockStoreWithCache btcBlockStore;
     private BtcBlockChain btcBlockChain;
 
@@ -126,6 +127,25 @@ public class BridgeSupport {
         FederationSupport federationSupport,
         LockingCapSupport lockingCapSupport,
         BtcBlockStoreWithCache.Factory btcBlockStoreFactory) {
+        this(bridgeConstants, provider, eventLogger, btcLockSenderProvider, peginInstructionsProvider,
+            host, btcContext, feePerKbSupport, federationSupport, lockingCapSupport,
+            btcBlockStoreFactory, BootstrapWindow.CLOSED);
+    }
+
+    public BridgeSupport(
+        BridgeConstants bridgeConstants,
+        BridgeStorageProvider provider,
+        BridgeEventLogger eventLogger,
+        BtcLockSenderProvider btcLockSenderProvider,
+        PeginInstructionsProvider peginInstructionsProvider,
+        BridgeHost host,
+        Context btcContext,
+        FeePerKbSupport feePerKbSupport,
+        FederationSupport federationSupport,
+        LockingCapSupport lockingCapSupport,
+        BtcBlockStoreWithCache.Factory btcBlockStoreFactory,
+        BootstrapWindow bootstrapWindow) {
+        this.bootstrapWindow = bootstrapWindow;
         this.host = host;
         this.provider = provider;
         this.bridgeConstants = bridgeConstants;
@@ -138,6 +158,16 @@ public class BridgeSupport {
         this.federationSupport = federationSupport;
         this.lockingCapSupport = lockingCapSupport;
         this.btcBlockStoreFactory = btcBlockStoreFactory;
+    }
+
+    /**
+     * What the peg asks of a peg-in at this height. Less while the chain is bootstrapping, so that the
+     * peg-in that seeds it does not have to be as large as the ones it will later carry.
+     */
+    public Coin getMinimumPeginTxValue() {
+        return bootstrapWindow.isOpenAt(host.blockNumber())
+            ? bridgeConstants.getBootstrapMinimumPeginTxValue()
+            : bridgeConstants.getMinimumPeginTxValue();
     }
 
     @VisibleForTesting
@@ -417,7 +447,7 @@ public class BridgeSupport {
             btcLockSenderProvider,
             peginInstructionsProvider
         );
-        Coin minimumPeginTxValue = bridgeConstants.getMinimumPeginTxValue();
+        Coin minimumPeginTxValue = getMinimumPeginTxValue();
         Wallet fedWallet = getNoSpendWalletForLiveFederations();
         PeginEvaluationResult peginEvaluationResult = PegUtils.evaluatePegin(
             btcTx,

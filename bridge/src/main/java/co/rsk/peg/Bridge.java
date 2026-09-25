@@ -507,7 +507,7 @@ public class Bridge {
 
     public Long getMinimumLockTxValue(Object[] args) {
         logger.trace("getMinimumLockTxValue");
-        return bridgeConstants.getMinimumPeginTxValue().getValue();
+        return bridgeSupport.getMinimumPeginTxValue().getValue();
     }
 
     public Boolean isBtcTxHashAlreadyProcessed(Object[] args) throws VMException {

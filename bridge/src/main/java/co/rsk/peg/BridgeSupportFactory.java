@@ -42,13 +42,23 @@ public class BridgeSupportFactory {
 
     private final Factory btcBlockStoreFactory;
     private final BridgeConstants bridgeConstants;
+    private final BootstrapWindow bootstrapWindow;
 
     public BridgeSupportFactory(
         Factory btcBlockStoreFactory,
         BridgeConstants bridgeConstants) {
 
+        this(btcBlockStoreFactory, bridgeConstants, BootstrapWindow.CLOSED);
+    }
+
+    public BridgeSupportFactory(
+        Factory btcBlockStoreFactory,
+        BridgeConstants bridgeConstants,
+        BootstrapWindow bootstrapWindow) {
+
         this.btcBlockStoreFactory = btcBlockStoreFactory;
         this.bridgeConstants = bridgeConstants;
+        this.bootstrapWindow = bootstrapWindow;
     }
 
     public BridgeSupport newInstance(BridgeHost host) {
@@ -79,7 +89,8 @@ public class BridgeSupportFactory {
             feePerKbSupport,
             federationSupport,
             lockingCapSupport,
-            btcBlockStoreFactory
+            btcBlockStoreFactory,
+            bootstrapWindow
         );
     }
 

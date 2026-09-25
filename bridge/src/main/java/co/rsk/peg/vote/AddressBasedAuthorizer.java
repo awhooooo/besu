@@ -48,6 +48,13 @@ public class AddressBasedAuthorizer {
             .anyMatch(address -> Arrays.equals(address, sender.getBytes().toArrayUnsafe()));
     }
 
+    /** The addresses this authorizer accepts. The node needs them to recognise bootstrap senders. */
+    public List<Address> getAuthorizedAddresses() {
+        return authorizedAddresses.stream()
+            .map(address -> Address.wrap(org.apache.tuweni.bytes.Bytes.wrap(address)))
+            .collect(Collectors.toList());
+    }
+
     public int getNumberOfAuthorizedKeys() {
         return authorizedAddresses.size();
     }
