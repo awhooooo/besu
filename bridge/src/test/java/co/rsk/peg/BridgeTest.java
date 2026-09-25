@@ -1008,10 +1008,12 @@ class BridgeTest {
 
         Coin minimumPeginTxValue = Coin.COIN;
         BridgeConstants bridgeConstants = mock(BridgeConstants.class);
-        when(bridgeConstants.getMinimumPeginTxValue()).thenReturn(minimumPeginTxValue);
         when(bridgeConstants.getBtcParams()).thenReturn(BridgeMainNetConstants.getInstance().getBtcParams());
 
+        // The minimum depends on whether the chain is still bootstrapping, so it is the support that
+        // knows it, not the constants.
         BridgeSupport bridgeSupportMock = mock(BridgeSupport.class);
+        when(bridgeSupportMock.getMinimumPeginTxValue()).thenReturn(minimumPeginTxValue);
         Bridge bridge = bridgeBuilder
             .bridgeConstants(bridgeConstants)
             .bridgeSupport(bridgeSupportMock)
@@ -1027,7 +1029,7 @@ class BridgeTest {
             assertThrows(VMException.class, () -> bridge.execute(data));
         } else {
             bridge.execute(data);
-            verify(bridgeConstants, times(1)).getMinimumPeginTxValue();
+            verify(bridgeSupportMock, times(1)).getMinimumPeginTxValue();
         }
     }
 
