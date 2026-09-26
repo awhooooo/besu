@@ -42,6 +42,7 @@ public class FakeNode implements EthClient {
     private long pendingNonce;
     private boolean syncing;
     private RuntimeException refuseSends;
+    private int calls;
 
     /** Answers this read with these values, encoded as the method declares its outputs. */
     public FakeNode answering(BridgeMethods method, Object... results) {
@@ -88,10 +89,17 @@ public class FakeNode implements EthClient {
 
     public void clearSent() {
         sent.clear();
+        calls = 0;
+    }
+
+    /** How many reads the sequencer has made, for asserting it is not being wasteful. */
+    public int callCount() {
+        return calls;
     }
 
     @Override
     public Bytes call(Address to, Bytes callData) {
+        calls++;
         BridgeMethods method = methodOf(callData);
         Function<Object[], Object[]> answer = answers.get(method);
         if (answer == null) {
