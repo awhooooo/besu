@@ -99,7 +99,15 @@ public final class BridgePrecompiles {
         return Weis.fromSatoshis(constantsFor(network).getMaxRbtc());
     }
 
-    private static BridgeConstants constantsFor(String network) {
+    /**
+     * The constants of a named Bitcoin network.
+     *
+     * <p>Public because the sequencer, which runs outside the node, has to agree with the bridge on
+     * every one of them: the same Bitcoin network, the same confirmation depths, the same
+     * federation keys. Deriving them separately would be two sources of truth for values that must
+     * match exactly.
+     */
+    public static BridgeConstants constantsFor(String network) {
         return switch (network.toLowerCase(Locale.ROOT)) {
             case "mainnet" -> BridgeMainNetConstants.getInstance();
             case "testnet" -> BridgeTestNetConstants.getInstance();

@@ -188,13 +188,17 @@ configure(allprojects - project(':platform')) {
 
     mavenCentral()
 
-    // bitcoinj-thin is built from source for the bridge module and published to the local
-    // Maven repository only, so there is no remote to fetch it from and no published checksum
-    // to pin it by. exclusiveContent keeps that narrow in both directions: this group comes
-    // from nowhere else, and nothing else may come from a local build.
+    // bitcoinj-thin (the bridge) and bitcoinj (the sequencer's Bitcoin peer) are both built from
+    // source and published to the local Maven repository only, so there is no remote to fetch
+    // them from and no published checksum to pin them by. exclusiveContent keeps that narrow in
+    // both directions: these groups come from nowhere else, and nothing else may come from a
+    // local build.
     exclusiveContent {
       forRepository { mavenLocal() }
-      filter { includeGroup('co.rsk.bitcoinj') }
+      filter {
+        includeGroup('co.rsk.bitcoinj')
+        includeGroup('org.bitcoinj')
+      }
     }
 
     // ethereum execution spec tests fixtures. Exclusively for ethereum submodule to run ref tests

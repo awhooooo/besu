@@ -44,6 +44,12 @@ dependencies {
     exclude group: 'com.squareup.okio'
     exclude group: 'com.lambdaworks'
   }
+  // The full bitcoinj: a real Bitcoin peer, which bitcoinj-thin is not. It keeps its own header
+  // chain and a watch-only wallet over the federation's address. Its leveldbjni block store is
+  // left out: the native it ships was built in 2013 for x86 only, and SPVBlockStore is pure Java.
+  implementation('org.bitcoinj:bitcoinj-core:0.15.6-bmb-new-rsk-4') {
+    exclude group: 'org.fusesource.leveldbjni'
+  }
   implementation 'com.typesafe:config'
   implementation 'com.fasterxml.jackson.core:jackson-databind'
   implementation 'org.apache.commons:commons-lang3'
@@ -76,3 +82,4 @@ spotless {
 javadoc {
   enabled = false
 }
+
