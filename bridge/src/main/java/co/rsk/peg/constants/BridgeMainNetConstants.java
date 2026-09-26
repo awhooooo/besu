@@ -16,7 +16,13 @@ public class BridgeMainNetConstants extends BridgeConstants {
         lockingCapConstants = LockingCapMainNetConstants.getInstance();
 
         btc2RskMinimumAcceptableConfirmations = 100;
-        rsk2BtcMinimumAcceptableConfirmations = 30_000;
+        // RSK's 30,000 was a reorg margin for a merge-mined chain whose blocks are far slower than
+        // this one's. QBFT commits a block finally, so there is no reorg to insure against; what is
+        // left is a window in which a wrong peg-out can be noticed before it leaves for bitcoin
+        // irreversibly. 3,600 blocks is three hours here, matching numberOfBlocksBetweenPegouts, so
+        // the wait to be confirmed is the same order as the wait to be built in the first place.
+        rsk2BtcMinimumAcceptableConfirmations = 3_600;
+
         minimumPeginTxValue = Coin.FIFTY_COINS.multiply(10);
         minimumPegoutTxValue = Coin.FIFTY_COINS.multiply(10);
         svpFundTxOutputsValue = Coin.COIN.multiply(2);
