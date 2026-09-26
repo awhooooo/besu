@@ -51,19 +51,35 @@ public class TurnScheduler {
     }
 
     /**
+     * Whether the given position's slot is the one happening now.
+     *
+     * <p>Not the same question as {@link #getDelay}, which answers when a slot next starts. While a
+     * position is inside its own slot, the next start is almost a full round away, so a small delay
+     * means the turn is about to begin rather than that it is under way.
+     */
+    public boolean isTurnOf(long now, int position) {
+        requirePosition(position);
+        return Math.floorMod(now, getInterval()) / period == position;
+    }
+
+    /**
      * How long from {@code now} until the given position's next turn starts.
      *
      * @param position this participant's index in the round
      */
     public long getDelay(long now, int position) {
-        if (position < 0 || position >= participants) {
-            throw new IllegalArgumentException(
-                String.format("Position must be between %d and %d, got %d", 0, participants - 1, position));
-        }
+        requirePosition(position);
 
         long totalPeriod = getInterval();
         long slotStart = (long) position * period;
         long intoRound = Math.floorMod(now, totalPeriod);
         return Math.floorMod(slotStart - intoRound, totalPeriod);
+    }
+
+    private void requirePosition(int position) {
+        if (position < 0 || position >= participants) {
+            throw new IllegalArgumentException(
+                String.format("Position must be between %d and %d, got %d", 0, participants - 1, position));
+        }
     }
 }

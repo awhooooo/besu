@@ -75,6 +75,52 @@ class TurnSchedulerTest {
     }
 
     @Test
+    void exactlyOneParticipantIsTakingItsTurnAtAnyInstant() {
+        TurnScheduler scheduler = new TurnScheduler(90_000, 9);
+
+        for (long tick = 0; tick < 1_620_000; tick += 7_919) {
+            final long now = tick;
+            long taking = java.util.stream.IntStream.range(0, 9)
+                .filter(position -> scheduler.isTurnOf(now, position))
+                .count();
+            assertThat(taking).as("at t=%d", now).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void aTurnLastsItsWholeSlotAndNotAMomentLonger() {
+        TurnScheduler scheduler = new TurnScheduler(1_000, 4);
+
+        // Position 1 holds [1000, 2000); position 2 takes over at exactly 2000.
+        assertThat(scheduler.isTurnOf(1_999, 1)).isTrue();
+        assertThat(scheduler.isTurnOf(2_000, 1)).isFalse();
+        assertThat(scheduler.isTurnOf(1_999, 2)).isFalse();
+        assertThat(scheduler.isTurnOf(2_000, 2)).isTrue();
+        assertThat(scheduler.isTurnOf(2_999, 2)).isTrue();
+        assertThat(scheduler.isTurnOf(3_000, 2)).isFalse();
+    }
+
+    @Test
+    void theTurnAndTheDelayAnswerDifferentQuestions() {
+        // Being inside a slot means the next start of that slot is nearly a round away, so a
+        // small delay means a turn is about to begin rather than that one is under way.
+        TurnScheduler scheduler = new TurnScheduler(1_000, 4);
+
+        assertThat(scheduler.isTurnOf(2_500, 2)).isTrue();
+        assertThat(scheduler.getDelay(2_500, 2)).isEqualTo(3_500L);
+    }
+
+    @Test
+    void aTurnBeforeTheEpochStillBelongsToSomebody() {
+        TurnScheduler scheduler = new TurnScheduler(1_000, 4);
+
+        long taking = java.util.stream.IntStream.range(0, 4)
+            .filter(position -> scheduler.isTurnOf(-1, position))
+            .count();
+        assertThat(taking).isEqualTo(1);
+    }
+
+    @Test
     void aPositionOutsideTheRoundIsRejected() {
         TurnScheduler scheduler = new TurnScheduler(1_000, 4);
         assertThatThrownBy(() -> scheduler.getDelay(0, 4)).isInstanceOf(IllegalArgumentException.class);
