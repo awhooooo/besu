@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.UnaryOperator;
 
 import co.rsk.bitcoinj.core.BtcECKey;
 import co.rsk.bitcoinj.core.BtcTransaction;
@@ -25,8 +27,10 @@ import co.rsk.federate.GasPolicy;
 import co.rsk.federate.PegoutOutpointValues;
 import co.rsk.federate.signing.ECDSASigner;
 import co.rsk.federate.signing.ECDSASignerFromFileKey;
+import co.rsk.federate.signing.ECPublicKey;
 import co.rsk.federate.signing.KeyId;
 import co.rsk.federate.signing.SequencerKeyId;
+import co.rsk.federate.signing.SignerException;
 import co.rsk.federate.testing.FakeBitcoinWrapper;
 import co.rsk.federate.testing.FakeNode;
 import co.rsk.federate.testing.PegoutFixture;
@@ -375,6 +379,53 @@ class BtcReleaseClientTest {
         assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
     }
 
+    @Test
+    void aHighSSignatureIsMadeCanonicalBeforeItIsSent() throws Exception {
+        // A key file cannot produce one, because bitcoinj canonicalises inside its own signing. A
+        // device returns whichever S it computed, and the bridge refuses a high-S signature by
+        // logging and returning, so one left alone would be dropped there in silence.
+        signer = signerReturning(signature ->
+            new BtcECKey.ECDSASignature(signature.r, BtcECKey.CURVE.getN().subtract(signature.s)));
+
+        Federation federation = PegoutFixture.standardFederation(keys, btcParams);
+        BtcTransaction pegout = PegoutFixture.legacyPegout(federation, btcParams, 1, PER_INPUT);
+        bridgeIsWaitingOn(Hash.fromHexStringLenient("0xc5"), pegout);
+
+        client(federation).signPegouts();
+
+        FakeNode.Sent sent = node.firstOf(BridgeMethods.ADD_SIGNATURE).orElseThrow();
+        BtcECKey.ECDSASignature signature = decode((byte[]) ((Object[]) sent.arguments()[1])[0]);
+        assertThat(signature.s).isLessThanOrEqualTo(BtcECKey.HALF_CURVE_ORDER);
+        assertThat(federatorKey().verify(
+            BitcoinUtils.generateSigHashForLegacyTransactionInput(pegout, 0), signature)).isTrue();
+    }
+
+    @Test
+    void aSignatureOverTheWrongDigestIsNotSentAndDoesNotCountAsHavingSigned() throws Exception {
+        // The failure a signer this process cannot see inside makes possible: a well-formed
+        // signature by the right key over something else. Well-formed is all the bridge's caller
+        // can observe, since addSignature answers nothing, so it has to be caught here.
+        AtomicBoolean misbehaving = new AtomicBoolean(true);
+        signer = signerReturning(signature ->
+            misbehaving.getAndSet(false) ? keys.get(0).sign(Sha256Hash.ZERO_HASH) : signature);
+
+        Federation federation = PegoutFixture.standardFederation(keys, btcParams);
+        BtcTransaction pegout = PegoutFixture.legacyPegout(federation, btcParams, 1, PER_INPUT);
+        bridgeIsWaitingOn(Hash.fromHexStringLenient("0xc6"), pegout);
+        BtcReleaseClient client = client(federation);
+
+        client.signPegouts();
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+
+        // Nothing was sent, so nothing was signed, and the next pass has to try again rather than
+        // find the peg-out in the cache and skip it forever.
+        client.signPegouts();
+        FakeNode.Sent sent = node.firstOf(BridgeMethods.ADD_SIGNATURE).orElseThrow();
+        assertThat(federatorKey().verify(
+            BitcoinUtils.generateSigHashForLegacyTransactionInput(pegout, 0),
+            decode((byte[]) ((Object[]) sent.arguments()[1])[0]))).isTrue();
+    }
+
     // ---------------------------------------------------------------- the validation spend
 
     @Test
@@ -669,6 +720,44 @@ class BtcReleaseClientTest {
             signature.encodeToBitcoin().length, signature.encodeToBitcoin()));
         pegout.getInput(0).setScriptSig(
             new co.rsk.bitcoinj.script.ScriptBuilder().addChunks(chunks).build());
+    }
+
+    /**
+     * The signer, answering with whatever the distortion makes of its signature.
+     *
+     * <p>Stands in for a device. A key file cannot return a high-S signature or one over another
+     * digest: bitcoinj signs and canonicalises in one step, from a key this process holds and can
+     * check itself against. Everything this guards against arrives only once the answer comes from
+     * somewhere else.
+     */
+    private ECDSASigner signerReturning(UnaryOperator<BtcECKey.ECDSASignature> distortion) {
+        ECDSASigner delegate = signer;
+        return new ECDSASigner() {
+            @Override
+            public boolean canSignWith(KeyId keyId) {
+                return delegate.canSignWith(keyId);
+            }
+
+            @Override
+            public List<String> check() {
+                return delegate.check();
+            }
+
+            @Override
+            public ECPublicKey getPublicKey(KeyId keyId) throws SignerException {
+                return delegate.getPublicKey(keyId);
+            }
+
+            @Override
+            public BtcECKey.ECDSASignature sign(KeyId keyId, Bytes32 digest) throws SignerException {
+                return distortion.apply(delegate.sign(keyId, digest));
+            }
+
+            @Override
+            public String describe() {
+                return delegate.describe();
+            }
+        };
     }
 
     private BtcECKey federatorKey() throws Exception {
