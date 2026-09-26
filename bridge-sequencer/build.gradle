@@ -11,6 +11,15 @@
  */
 
 apply plugin: 'java-library'
+// A federation member runs this as a process of its own, so it needs to be startable rather than
+// only linkable: the application plugin gives it a start script and a distribution with its
+// dependencies alongside.
+apply plugin: 'application'
+
+application {
+  mainClass = 'co.rsk.federate.Main'
+  applicationName = 'bmb-sequencer'
+}
 
 jar {
   archiveBaseName = calculateArtifactId(project)
@@ -21,6 +30,7 @@ jar {
       'Implementation-Title': archiveBaseName,
       'Implementation-Version': calculateVersion(),
       'Commit-Hash': getGitCommitDetails(40).hash,
+      'Main-Class': 'co.rsk.federate.Main',
       'Automatic-Module-Name': 'bmb.bridge.sequencer'
       )
   }

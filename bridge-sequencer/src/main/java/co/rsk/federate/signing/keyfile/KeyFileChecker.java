@@ -47,16 +47,14 @@ public class KeyFileChecker {
 
     /** Everything wrong with the file, empty when there is nothing. */
     public List<String> check() {
-        List<String> messages = new ArrayList<>();
+        // A file that is not there has no permissions worth reporting, and saying both makes the
+        // real problem harder to pick out of the list.
         String keyFile = checkKeyFile();
         if (StringUtils.isNotEmpty(keyFile)) {
-            messages.add(keyFile);
+            return List.of(keyFile);
         }
         String permissions = checkFilePermissions();
-        if (StringUtils.isNotEmpty(permissions)) {
-            messages.add(permissions);
-        }
-        return messages;
+        return StringUtils.isNotEmpty(permissions) ? List.of(permissions) : List.of();
     }
 
     public String checkKeyFile() {
