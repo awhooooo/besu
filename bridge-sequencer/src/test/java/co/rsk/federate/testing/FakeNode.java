@@ -10,8 +10,10 @@ import java.util.function.Function;
 
 import co.rsk.federate.rpc.EthClient;
 import co.rsk.federate.rpc.RpcException;
+import co.rsk.peg.BridgeAddresses;
 import co.rsk.peg.BridgeMethods;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.core.Transaction;
 
@@ -33,6 +35,8 @@ public class FakeNode implements EthClient {
 
     private final Map<BridgeMethods, Function<Object[], Object[]>> answers = new EnumMap<>(BridgeMethods.class);
     private final List<Sent> sent = new ArrayList<>();
+    private final List<LogEntry> emitted = new ArrayList<>();
+    private final List<LogFilter> logQueries = new ArrayList<>();
 
     private long blockNumber = 1_000;
     private long pendingNonce;
@@ -129,6 +133,42 @@ public class FakeNode implements EthClient {
     @Override
     public Optional<TransactionReceipt> receipt(Bytes32Hash transactionHash) {
         return Optional.empty();
+    }
+
+    @Override
+    public List<LogEntry> logs(LogFilter filter) {
+        logQueries.add(filter);
+        return emitted.stream()
+            .filter(log -> log.blockNumber() >= filter.fromBlock() && log.blockNumber() <= filter.toBlock())
+            .filter(log -> matches(log, filter.topics()))
+            .toList();
+    }
+
+    /** Places a log on the chain at a block, as the bridge would have emitted it. */
+    public FakeNode emitting(long blockNumber, Bytes32 topic0, List<Bytes32> otherTopics, Bytes data) {
+        List<Bytes32> topics = new ArrayList<>();
+        topics.add(topic0);
+        topics.addAll(otherTopics);
+        emitted.add(new LogEntry(BridgeAddresses.BRIDGE, topics, data, blockNumber));
+        return this;
+    }
+
+    /** Every log query made, so a test can see how far back the sequencer looked. */
+    public List<LogFilter> logQueries() {
+        return List.copyOf(logQueries);
+    }
+
+    private static boolean matches(LogEntry log, List<List<Bytes32>> wanted) {
+        for (int position = 0; position < wanted.size(); position++) {
+            List<Bytes32> anyOf = wanted.get(position);
+            if (anyOf.isEmpty()) {
+                continue;
+            }
+            if (log.topic(position).filter(anyOf::contains).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static BridgeMethods methodOf(Bytes callData) {

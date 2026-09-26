@@ -24,6 +24,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -32,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.datatypes.Address;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +111,47 @@ public class JsonRpcEthClient implements EthClient {
                 "0x1".equals(result.get("status").asText())));
     }
 
+    @Override
+    public List<LogEntry> logs(LogFilter filter) {
+        ObjectNode criteria = MAPPER.createObjectNode();
+        criteria.put("fromBlock", quantityHex(filter.fromBlock()));
+        criteria.put("toBlock", quantityHex(filter.toBlock()));
+        criteria.put("address", filter.address().toHexString());
+
+        ArrayNode topics = criteria.putArray("topics");
+        for (List<Bytes32> position : filter.topics()) {
+            if (position.isEmpty()) {
+                // A null in this position is how JSON-RPC says "anything here", which is what lets
+                // a later topic be constrained without constraining this one.
+                topics.addNull();
+            } else if (position.size() == 1) {
+                topics.add(position.get(0).toHexString());
+            } else {
+                ArrayNode anyOf = topics.addArray();
+                position.forEach(topic -> anyOf.add(topic.toHexString()));
+            }
+        }
+
+        JsonNode result = request("eth_getLogs", criteria);
+        if (result == null || result.isNull()) {
+            return List.of();
+        }
+
+        List<LogEntry> entries = new ArrayList<>(result.size());
+        for (JsonNode log : result) {
+            List<Bytes32> logTopics = new ArrayList<>();
+            for (JsonNode topic : log.get("topics")) {
+                logTopics.add(Bytes32.fromHexString(topic.asText()));
+            }
+            entries.add(new LogEntry(
+                Address.fromHexString(log.get("address").asText()),
+                logTopics,
+                Bytes.fromHexString(log.get("data").asText()),
+                quantity(log.get("blockNumber"))));
+        }
+        return entries;
+    }
+
     // ------------------------------------------------------------------ plumbing
 
     private JsonNode request(String method, Object... params) {
@@ -175,6 +219,10 @@ public class JsonRpcEthClient implements EthClient {
             throw new RpcException("The node's answer to " + method + " had no result");
         }
         return parsed.get("result");
+    }
+
+    private static String quantityHex(long value) {
+        return "0x" + Long.toHexString(value);
     }
 
     private static long quantity(JsonNode node) {

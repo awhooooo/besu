@@ -239,6 +239,11 @@ class BridgeClientTest {
         }
 
         @Override
+        public List<LogEntry> logs(final LogFilter filter) {
+            return List.of();
+        }
+
+        @Override
         public Optional<TransactionReceipt> receipt(final Bytes32Hash transactionHash) {
             return Optional.empty();
         }

@@ -17,9 +17,11 @@
  */
 package co.rsk.federate.rpc;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.datatypes.Address;
 
 /**
@@ -47,6 +49,43 @@ public interface EthClient {
 
     /** Present once the transaction is in a block, whether it succeeded there or not. */
     Optional<TransactionReceipt> receipt(Bytes32Hash transactionHash);
+
+    /**
+     * The logs matching a filter.
+     *
+     * <p>Nodes cap how many blocks one query may span, so the caller asks in windows rather than
+     * for a whole history at once.
+     */
+    List<LogEntry> logs(LogFilter filter);
+
+    /**
+     * Which logs to ask for.
+     *
+     * <p>{@code topics} is positional, as the JSON-RPC call is: the first entry constrains the
+     * event signature, the second the first indexed argument, and so on. An entry holding several
+     * values matches any of them; an empty entry matches anything, and is how a later position is
+     * constrained without constraining an earlier one.
+     */
+    record LogFilter(long fromBlock, long toBlock, Address address, List<List<Bytes32>> topics) {
+        public LogFilter {
+            if (fromBlock < 0 || toBlock < fromBlock) {
+                throw new IllegalArgumentException("Not a block range: " + fromBlock + " to " + toBlock);
+            }
+            topics = List.copyOf(topics.stream().map(List::copyOf).toList());
+        }
+    }
+
+    /** One log, with only what the sequencer reads from it. */
+    record LogEntry(Address address, List<Bytes32> topics, Bytes data, long blockNumber) {
+        public LogEntry {
+            topics = List.copyOf(topics);
+        }
+
+        /** The indexed argument at this position, or empty if the log has no such topic. */
+        public Optional<Bytes32> topic(int index) {
+            return index < topics.size() ? Optional.of(topics.get(index)) : Optional.empty();
+        }
+    }
 
     /** A 32-byte hash, named so that a transaction hash cannot be passed where an address belongs. */
     record Bytes32Hash(Bytes value) {

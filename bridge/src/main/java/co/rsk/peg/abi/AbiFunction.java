@@ -160,6 +160,13 @@ public final class AbiFunction {
         return encodeTuple(data, args);
     }
 
+    /** The non-indexed fields of a log, read back out of its data. */
+    public Object[] decodeEventData(Bytes data) {
+        requireEvent();
+        Param[] nonIndexed = Arrays.stream(inputs).filter(param -> !param.indexed()).toArray(Param[]::new);
+        return decodeTuple(nonIndexed, data);
+    }
+
     @Override
     public String toString() {
         return formatSignature();
