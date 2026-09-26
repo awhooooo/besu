@@ -56,6 +56,14 @@ public interface BitcoinWrapper {
 
     void removeFederationListener(Federation federation, TransactionListener listener);
 
+    /**
+     * Sends a transaction to the bitcoin peers.
+     *
+     * <p>Broadcasting the same transaction twice is harmless: peers that have it ignore it, and a
+     * repeat is how a broadcast that failed to propagate gets another chance.
+     */
+    void broadcast(Transaction tx);
+
     void addBlockListener(BlockListener listener);
 
     void removeBlockListener(BlockListener listener);

@@ -54,7 +54,7 @@ class BtcToRskClientTest {
     private static final BigInteger CHAIN_ID = BigInteger.valueOf(33);
     private static final String RSK_KEY = "505334c7745df2fc61486dffb900784505776a898377172ffa77384892749179";
     private static final int HEADERS_PER_TURN = 25;
-    private static final int CONFIRMATIONS_ON_RSK = 10;
+    private static final int CONFIRMATIONS_ON_RSK = 10;  // small, so a test can step over it
 
     @TempDir Path home;
 
@@ -78,7 +78,7 @@ class BtcToRskClientTest {
         bitcoin.appendToBestChain(genesis);
 
         node = new FakeNode();
-        federatorSupport = new FederatorSupport(bridgeClient(node));
+        federatorSupport = new FederatorSupport(bridgeClient(node), bridgeConstants.getBtcParams());
     }
 
     // ---------------------------------------------------------------- gathering proofs

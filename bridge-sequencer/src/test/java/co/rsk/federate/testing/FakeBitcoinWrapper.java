@@ -22,6 +22,7 @@ import org.bitcoinj.core.Transaction;
 public class FakeBitcoinWrapper implements BitcoinWrapper {
 
     private final List<BlockListener> blockListeners = new ArrayList<>();
+    private final List<Transaction> broadcast = new ArrayList<>();
     private final Map<Federation, List<TransactionListener>> federationListeners = new LinkedHashMap<>();
 
     /** Best chain, height 0 upward. */
@@ -127,6 +128,16 @@ public class FakeBitcoinWrapper implements BitcoinWrapper {
     @Override
     public void removeFederationListener(Federation federation, TransactionListener listener) {
         federationListeners.getOrDefault(federation, new ArrayList<>()).remove(listener);
+    }
+
+    @Override
+    public void broadcast(Transaction tx) {
+        broadcast.add(tx);
+    }
+
+    /** What has been sent to the bitcoin network, in order, including repeats. */
+    public List<Transaction> broadcast() {
+        return List.copyOf(broadcast);
     }
 
     @Override

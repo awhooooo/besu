@@ -227,6 +227,16 @@ public class BitcoinWrapperImpl implements BitcoinWrapper {
     }
 
     @Override
+    public void broadcast(Transaction tx) {
+        Context.propagate(btcContext);
+        // Through the peer group this wrapper already keeps. Powpeg's release client opened a
+        // second one of its own, which meant two sets of connections to the same nodes and a
+        // wallet that never saw what its own process had sent.
+        logger.info("[broadcast] {} to the bitcoin network", tx.getTxId());
+        kit.peerGroup().broadcastTransaction(tx);
+    }
+
+    @Override
     public void addBlockListener(BlockListener listener) {
         blockListeners.add(listener);
     }

@@ -18,11 +18,16 @@
 package co.rsk.federate;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Objects;
 
+import co.rsk.bitcoinj.core.BtcECKey;
+import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.federate.rpc.EthClient;
 import co.rsk.federate.signing.SignerException;
 import co.rsk.peg.BridgeMethods;
+import co.rsk.peg.StateForFederator;
+import org.hyperledger.besu.datatypes.Hash;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.PartialMerkleTree;
 import org.bitcoinj.core.Sha256Hash;
@@ -46,9 +51,11 @@ public class FederatorSupport {
     private static final Logger logger = LoggerFactory.getLogger(FederatorSupport.class);
 
     private final BridgeClient bridge;
+    private final NetworkParameters btcParams;
 
-    public FederatorSupport(BridgeClient bridge) {
+    public FederatorSupport(BridgeClient bridge, NetworkParameters btcParams) {
         this.bridge = Objects.requireNonNull(bridge, "bridge");
+        this.btcParams = Objects.requireNonNull(btcParams, "btcParams");
     }
 
     public BridgeClient bridgeClient() {
@@ -134,6 +141,29 @@ public class FederatorSupport {
     public void sendUpdateCollections() throws SignerException {
         logger.debug("[sendUpdateCollections]");
         bridge.send(BridgeMethods.UPDATE_COLLECTIONS);
+    }
+
+    /** The peg-outs the bridge is waiting for signatures on, by the transaction that created them. */
+    public StateForFederator getStateForBtcReleaseClient() {
+        byte[] encoded = bridge.callOne(BridgeMethods.GET_STATE_FOR_BTC_RELEASE_CLIENT);
+        return new StateForFederator(encoded, btcParams);
+    }
+
+    /**
+     * Gives the bridge this federator's signatures, one per input, in input order.
+     *
+     * @param federatorPublicKey the BTC key they were made with, so the bridge knows whose they are
+     * @param signatures DER-encoded, one for each input of the peg-out
+     * @param rskTxHash the transaction that created the peg-out, which is how the bridge knows it
+     */
+    public void addSignature(BtcECKey federatorPublicKey, List<byte[]> signatures, Hash rskTxHash)
+        throws SignerException {
+        logger.debug("[addSignature] {} signatures for {}", signatures.size(), rskTxHash);
+        bridge.send(
+            BridgeMethods.ADD_SIGNATURE,
+            federatorPublicKey.getPubKey(),
+            signatures.toArray(new Object[0]),
+            rskTxHash.getBytes().toArrayUnsafe());
     }
 
     /** The height of the Besu chain the node is following. */

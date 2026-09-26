@@ -37,6 +37,12 @@ public final class ThinConverter {
         return new co.rsk.bitcoinj.core.BtcTransaction(btcParams, tx.bitcoinSerialize());
     }
 
+    /** A transaction the bridge produced, in the form the Bitcoin peer can broadcast. */
+    public static org.bitcoinj.core.Transaction toOriginal(
+        org.bitcoinj.core.NetworkParameters params, co.rsk.bitcoinj.core.BtcTransaction tx) {
+        return new org.bitcoinj.core.Transaction(params, tx.bitcoinSerialize());
+    }
+
     /** The network the bridge names, as the Bitcoin peer knows it. */
     public static org.bitcoinj.core.NetworkParameters toOriginal(String btcParamsId) {
         org.bitcoinj.core.NetworkParameters params = org.bitcoinj.core.NetworkParameters.fromID(btcParamsId);
