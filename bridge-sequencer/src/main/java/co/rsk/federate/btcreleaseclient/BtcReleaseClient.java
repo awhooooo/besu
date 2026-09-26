@@ -332,19 +332,47 @@ public class BtcReleaseClient {
         SigHashCalculator sigHashCalculator = sigHashCalculatorFor(pegoutBtcTx, chainHeight);
         validateCanBeSigned(pegoutBtcTx, sigHashCalculator);
 
+        BtcECKey federatorPublicKey = signer.getPublicKey(SequencerKeyId.BTC.getKeyId()).toBtcKey();
         List<byte[]> signatures = new ArrayList<>(pegoutBtcTx.getInputs().size());
         for (int inputIndex = 0; inputIndex < pegoutBtcTx.getInputs().size(); inputIndex++) {
             Sha256Hash sigHash = sigHashCalculator.calculate(pegoutBtcTx, inputIndex);
-            BtcECKey.ECDSASignature signature =
-                signer.sign(SequencerKeyId.BTC.getKeyId(), Bytes32.wrap(sigHash.getBytes()));
-            signatures.add(signature.encodeToDER());
+            signatures.add(signDigest(federatorPublicKey, sigHash).encodeToDER());
         }
 
-        BtcECKey federatorPublicKey = signer.getPublicKey(SequencerKeyId.BTC.getKeyId()).toBtcKey();
         federatorSupport.addSignature(federatorPublicKey, signatures, pegoutCreationRskTxHash);
         signedCache.put(pegoutCreationRskTxHash);
         logger.info("[signPegout] Signed {} inputs of the peg-out created in {}",
             signatures.size(), pegoutCreationRskTxHash);
+    }
+
+    /**
+     * Signs one input's digest, in the form the bridge will accept.
+     *
+     * <p>Two steps that a key file makes look unnecessary. The signature is canonicalised because
+     * the bridge refuses a high-S one outright; bitcoinj canonicalises inside its own signing, so
+     * leaving it out here would make this correct only for as long as the key stays in a file, and
+     * a device returns whichever S it computed.
+     *
+     * <p>It is then verified against the digest and this sequencer's own public key, because the
+     * bridge verifies it too and answers a bad one by logging and returning. Nothing comes back from
+     * addSignature to say so, so an unchecked signature would be dropped there while this side
+     * recorded the peg-out as signed and went quiet about it until the cache expired.
+     */
+    private BtcECKey.ECDSASignature signDigest(BtcECKey federatorPublicKey, Sha256Hash sigHash)
+        throws SignerException {
+
+        BtcECKey.ECDSASignature signature = signer
+            .sign(SequencerKeyId.BTC.getKeyId(), Bytes32.wrap(sigHash.getBytes()))
+            .toCanonicalised();
+
+        if (!federatorPublicKey.verify(sigHash, signature)) {
+            throw new SignerException(String.format(
+                "%s returned a signature over digest %s that does not verify against its own public"
+                    + " key %s. The digest signed was not the one asked for, or the key is not the"
+                    + " one it claims.",
+                SequencerKeyId.BTC.getKeyId(), sigHash, federatorPublicKey));
+        }
+        return signature;
     }
 
     /**
