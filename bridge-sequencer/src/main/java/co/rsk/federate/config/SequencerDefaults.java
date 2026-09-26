@@ -69,6 +69,35 @@ public final class SequencerDefaults {
      */
     public static final int MAX_LOG_LOOKBACK = 50_000;
 
+    /** How often to look for a federation change. It happens perhaps twice in a chain's life. */
+    public static final int WATCHER_PERIOD_MS = 120_000;
+
+    /**
+     * How often to sign whatever peg-outs are waiting.
+     *
+     * <p>Not a turn: every signature counts towards the threshold, so there is nothing redundant
+     * to take turns over.
+     */
+    public static final int RELEASE_PERIOD_MS = 90_000;
+
+    /** What a bridge transaction offers to pay, in wei per gas, once the bootstrap window is over. */
+    public static final long GAS_PRICE = 1_000L;
+
+    /** Enough for the largest bridge call: registering a transaction with its proof. */
+    public static final long GAS_LIMIT = 4_000_000L;
+
+    /**
+     * How many times to find the node unreachable before giving up.
+     *
+     * <p>Giving up means exiting, so that whatever supervises the process can decide what to do.
+     * Carrying on regardless would be a sequencer that looks alive and informs the bridge of
+     * nothing.
+     */
+    public static final int NODE_UNREACHABLE_ATTEMPTS = 10;
+
+    /** How long to wait between those attempts. */
+    public static final int NODE_RETRY_PERIOD_MS = 30_000;
+
     /**
      * How long to remember having signed a peg-out, in minutes.
      *
