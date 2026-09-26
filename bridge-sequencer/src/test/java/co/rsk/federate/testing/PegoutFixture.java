@@ -55,6 +55,34 @@ public final class PegoutFixture {
         return keys;
     }
 
+    /**
+     * A federation with no connection to this sequencer at all: neither its BTC key nor its RSK
+     * one. What an outgoing member sees when a proposal is voted in with fresh keys.
+     */
+    public static Federation federationOfStrangers(NetworkParameters btcParams) {
+        return FederationFactory.buildStandardMultiSigFederation(new FederationArgs(
+            FederationMember.getFederationMembersFromKeys(strangersKeys(3)),
+            java.time.Instant.ofEpochSecond(1_700_000_000L), 1L, btcParams));
+    }
+
+    /**
+     * A federation holding this sequencer's BTC key but somebody else's RSK keys.
+     *
+     * <p>Not a state a correct deployment reaches; it is what a pair of mismatched key files
+     * produces. The signature would be right and the transaction carrying it refused, so the two
+     * keys have to be checked separately.
+     */
+    public static Federation federationWithOurBtcKeyButNotOurRskKey(NetworkParameters btcParams) {
+        List<BtcECKey> ours = federationKeys(3);
+        List<BtcECKey> strangers = strangersKeys(3);
+        List<FederationMember> members = new ArrayList<>(3);
+        for (int i = 0; i < 3; i++) {
+            members.add(new FederationMember(ours.get(i), strangers.get(i), strangers.get(i)));
+        }
+        return FederationFactory.buildStandardMultiSigFederation(new FederationArgs(
+            members, java.time.Instant.ofEpochSecond(1_700_000_000L), 1L, btcParams));
+    }
+
     /** A plain multisig federation, as a chain's genesis federation is. */
     public static Federation standardFederation(List<BtcECKey> keys, NetworkParameters btcParams) {
         return FederationFactory.buildStandardMultiSigFederation(args(keys, btcParams));
@@ -69,12 +97,28 @@ public final class PegoutFixture {
             federationConstants.getErpFedActivationDelay());
     }
 
+    /**
+     * The RSK key a sequencer in these federations signs transactions with.
+     *
+     * <p>A member is identified twice over: by its BTC key, which says whose signature counts,
+     * and by its RSK key, whose address says whether the call is allowed at all. A fixture that
+     * got the second wrong would let a test pass while the bridge rejected every transaction.
+     */
+    public static final String MEMBER_RSK_KEY =
+        "505334c7745df2fc61486dffb900784505776a898377172ffa77384892749179";
+
     private static FederationArgs args(List<BtcECKey> keys, NetworkParameters btcParams) {
+        BtcECKey rskKey = BtcECKey.fromPrivate(
+            org.apache.tuweni.bytes.Bytes.fromHexString(MEMBER_RSK_KEY).toArray());
+        List<FederationMember> members = new ArrayList<>(keys.size());
+        for (int i = 0; i < keys.size(); i++) {
+            // The first member is the sequencer running these tests; the rest are other people.
+            members.add(i == 0
+                ? new FederationMember(keys.get(0), rskKey, rskKey)
+                : FederationMember.getFederationMemberFromKey(keys.get(i)));
+        }
         return new FederationArgs(
-            FederationMember.getFederationMembersFromKeys(keys),
-            java.time.Instant.ofEpochSecond(1_700_000_000L),
-            1L,
-            btcParams);
+            members, java.time.Instant.ofEpochSecond(1_700_000_000L), 1L, btcParams);
     }
 
     /**

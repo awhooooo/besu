@@ -53,6 +53,7 @@ import co.rsk.federate.signing.SignerException;
 import co.rsk.peg.BridgeEvents;
 import co.rsk.peg.BridgeUtils;
 import co.rsk.peg.StateForFederator;
+import co.rsk.peg.StateForProposedFederator;
 import co.rsk.peg.bitcoin.BitcoinUtils;
 import co.rsk.peg.constants.BridgeConstants;
 import co.rsk.peg.federation.ErpFederation;
@@ -119,31 +120,61 @@ public class BtcReleaseClient {
     }
 
     /**
-     * Begins signing for a federation this federator belongs to.
+     * Begins watching a federation.
      *
-     * <p>Refuses one it does not belong to. Every signature would be made with a key the
-     * federation's redeem script does not name, so the bridge would reject each of them, and the
-     * only evidence would be transactions that cost gas and changed nothing. Better to fail at
-     * the point the mistake was made.
+     * <p>Accepts one whose keys this sequencer does not hold, and says so. Holding none of them is
+     * an ordinary state rather than a misconfiguration: federation keys are not reused across a
+     * change, so a member of a proposed federation belongs to nothing live until the change
+     * completes, and that is exactly when it has to be running in order to sign the validation
+     * spend. Whether a signature is worth making is decided per peg-out instead, where the
+     * redeem script of the input says which federation is being spent.
      */
     public void start(Federation federation) {
         Objects.requireNonNull(federation, "federation");
-
-        BtcECKey federatorPublicKey;
-        try {
-            federatorPublicKey = signer.getPublicKey(SequencerKeyId.BTC.getKeyId()).toBtcKey();
-        } catch (SignerException e) {
-            throw new IllegalStateException("Cannot read this federator's BTC public key", e);
+        if (!observedFederations.add(federation)) {
+            return;
         }
-        if (!federation.hasBtcPublicKey(federatorPublicKey)) {
-            throw new IllegalStateException(String.format(
-                "This sequencer's BTC key %s is not one of federation %s's; it can sign nothing for it",
-                federatorPublicKey, federation.getAddress()));
-        }
-
-        if (observedFederations.add(federation)) {
+        if (isMemberOf(federation)) {
             logger.info("[start] Signing for federation {}", federation.getAddress());
+        } else {
+            logger.info(
+                "[start] Watching federation {}, but this sequencer holds none of its keys and will "
+                    + "sign nothing for it",
+                federation.getAddress());
         }
+    }
+
+    /**
+     * Whether a signature from this sequencer would count towards this federation's threshold.
+     *
+     * <p>Both keys have to belong to it, because the bridge checks both and for different things.
+     * The BTC key decides whose signature it is: addSignature looks the member up by it. The RSK
+     * key decides whether the call is allowed at all, by comparing the sending address against
+     * each member's. A sequencer configured with one federation's BTC key and another's RSK key
+     * would sign correctly and have the transaction rejected before anyone looked at the
+     * signature.
+     */
+    private boolean isMemberOf(Federation federation) {
+        try {
+            BtcECKey btcPublicKey = signer.getPublicKey(SequencerKeyId.BTC.getKeyId()).toBtcKey();
+            if (!federation.hasBtcPublicKey(btcPublicKey)) {
+                return false;
+            }
+        } catch (SignerException e) {
+            logger.error("[isMemberOf] Cannot read this sequencer's BTC public key: {}", e.getMessage(), e);
+            return false;
+        }
+
+        byte[] senderAddress = federatorSupport.senderAddress().getBytes().toArrayUnsafe();
+        if (!federation.hasMemberWithRskAddress(senderAddress)) {
+            logger.warn(
+                "[isMemberOf] This sequencer holds a BTC key of federation {} but sends from {}, which is "
+                    + "not one of its members' addresses. The bridge would refuse the call before reading "
+                    + "the signature.",
+                federation.getAddress(), federatorSupport.senderAddress());
+            return false;
+        }
+        return true;
     }
 
     public void stop(Federation federation) {
@@ -161,6 +192,14 @@ public class BtcReleaseClient {
         if (!federatorSupport.nodeIsUsable()) {
             logger.warn("[updateBridge] Skipped: the node is still syncing");
             return;
+        }
+
+        // Before the peg-outs, because a proposed federation is waiting on this to become the
+        // federation at all, and because there is at most one of them.
+        try {
+            signSvpSpendTransaction();
+        } catch (Exception e) {
+            logger.error("[updateBridge] Signing the validation spend failed: {}", e.getMessage(), e);
         }
 
         try {
@@ -207,6 +246,79 @@ public class BtcReleaseClient {
                 logger.error("[signPegouts] Peg-out created in {} failed: {}", entry.getKey(), e.getMessage(), e);
             }
         }
+    }
+
+    /**
+     * Signs the transaction that proves a proposed federation can spend.
+     *
+     * <p>Before a federation is handed the peg, the bridge sends it a small amount and builds a
+     * transaction spending that back, which only the proposed federation's members can sign. If
+     * they cannot, the change is abandoned rather than discovered later with the whole peg behind
+     * it.
+     *
+     * <p>Signed exactly like a peg-out, because it is one; it is only kept in a different place
+     * because a different federation signs it. This sequencer will be able to when it holds a
+     * proposed federation's keys, which is the state a new member is in before a change completes,
+     * and will not when it holds the outgoing federation's — those members have already done their
+     * part by signing the transaction that funded the proposal.
+     */
+    void signSvpSpendTransaction() {
+        Context.propagate(Context.getOrCreate(bridgeConstants.getBtcParams()));
+
+        Map.Entry<Hash, BtcTransaction> waiting = federatorSupport.getStateForProposedFederator()
+            .map(StateForProposedFederator::getSvpSpendTxWaitingForSignatures)
+            .orElse(null);
+        if (waiting == null) {
+            return;
+        }
+
+        Hash creationRskTxHash = waiting.getKey();
+        BtcTransaction svpSpendTx = waiting.getValue();
+        long chainHeight = federatorSupport.getRskBestChainHeight();
+
+        if (!isReadyToSign(svpSpendTx, chainHeight)) {
+            return;
+        }
+
+        try {
+            signPegout(creationRskTxHash, svpSpendTx, chainHeight);
+        } catch (FederatorAlreadySignedException e) {
+            logger.debug("[signSvpSpendTransaction] {}", e.getMessage());
+        } catch (FederationCantSignException e) {
+            // The ordinary case for a member of the outgoing federation: the proposal is not
+            // theirs to prove.
+            logger.debug("[signSvpSpendTransaction] {}", e.getMessage());
+        } catch (Exception e) {
+            logger.error("[signSvpSpendTransaction] Validation spend created in {} failed: {}",
+                creationRskTxHash, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Whether the validation spend has waited as long as any other peg-out must.
+     *
+     * <p>It is held back for the same reason: once signed it goes to bitcoin and cannot be
+     * recalled. The block it was built in comes from the announcement that also carries its
+     * outpoint values, so finding out costs nothing beyond the query already needed to sign it.
+     */
+    private boolean isReadyToSign(BtcTransaction svpSpendTx, long chainHeight) {
+        long required = bridgeConstants.getRsk2BtcMinimumAcceptableConfirmations();
+        Optional<PegoutOutpointValues.Announcement> announcement =
+            outpointValues.announcementFor(svpSpendTx.getHash(), chainHeight);
+
+        if (announcement.isEmpty()) {
+            logger.warn("[isReadyToSign] No announcement found for validation spend {}; cannot tell "
+                + "how long it has waited, and will not sign it", svpSpendTx.getHash());
+            return false;
+        }
+
+        long waited = chainHeight - announcement.get().blockNumber();
+        if (waited < required) {
+            logger.debug("[isReadyToSign] Validation spend {} has waited {} of {} blocks",
+                svpSpendTx.getHash(), waited, required);
+            return false;
+        }
+        return true;
     }
 
     private void signPegout(Hash pegoutCreationRskTxHash, BtcTransaction pegoutBtcTx, long chainHeight)
@@ -299,13 +411,21 @@ public class BtcReleaseClient {
                     inputIndex, pegoutBtcTx.getHash(), federatorPublicKey));
             }
 
+            // A federation whose keys this sequencer does not hold is no use here: the signature
+            // would be made with a key the redeem script does not name, the bridge would reject
+            // it, and the only trace would be gas spent once a turn for as long as the peg-out
+            // was waiting.
             Script standardRedeemScript = standardRedeemScriptOf(redeemScript);
-            boolean anyWatchedFederationSpends = observedFederations.stream()
+            boolean spendsAFederationWeCanSignFor = observedFederations.stream()
+                .filter(this::isMemberOf)
                 .anyMatch(federation -> defaultRedeemScriptOf(federation).equals(standardRedeemScript));
-            if (!anyWatchedFederationSpends) {
+            if (!spendsAFederationWeCanSignFor) {
+                boolean watchedAtAll = observedFederations.stream()
+                    .anyMatch(federation -> defaultRedeemScriptOf(federation).equals(standardRedeemScript));
                 throw new FederationCantSignException(String.format(
-                    "Input %d of peg-out %s spends a federation this sequencer does not watch",
-                    inputIndex, pegoutBtcTx.getHash()));
+                    "Input %d of peg-out %s spends a federation this sequencer %s",
+                    inputIndex, pegoutBtcTx.getHash(),
+                    watchedAtAll ? "watches but holds no key of" : "does not watch"));
             }
         }
     }

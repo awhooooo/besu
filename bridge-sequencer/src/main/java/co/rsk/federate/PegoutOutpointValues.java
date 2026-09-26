@@ -53,7 +53,7 @@ public class PegoutOutpointValues {
 
     private final BridgeEventReader events;
     private final long maxLookback;
-    private final Map<Sha256Hash, List<Coin>> known = new HashMap<>();
+    private final Map<Sha256Hash, Announcement> known = new HashMap<>();
 
     public PegoutOutpointValues(BridgeEventReader events, long maxLookback) {
         this.events = Objects.requireNonNull(events, "events");
@@ -64,14 +64,37 @@ public class PegoutOutpointValues {
     }
 
     /**
+     * What the bridge said when it built a peg-out.
+     *
+     * @param outpointValues what each input was worth, in input order
+     * @param blockNumber the block the announcement was in, which is when the peg-out was built
+     */
+    public record Announcement(List<Coin> outpointValues, long blockNumber) {
+        public Announcement {
+            outpointValues = List.copyOf(outpointValues);
+        }
+    }
+
+    /**
      * The value of each input of this peg-out, in input order.
      *
-     * @param btcTxHash the peg-out's hash as the bridge announced it, which is the hash it had
-     *     before any signatures were added
+     * @param btcTxHash the peg-out's hash as the bridge announced it, which for a segwit peg-out
+     *     is also the hash it has now, since a txid does not cover the witness
      * @param chainHeight where to start searching back from
      */
-    public synchronized Optional<List<Coin>> valuesFor(Sha256Hash btcTxHash, long chainHeight) {
-        List<Coin> cached = known.get(btcTxHash);
+    public Optional<List<Coin>> valuesFor(Sha256Hash btcTxHash, long chainHeight) {
+        return announcementFor(btcTxHash, chainHeight).map(Announcement::outpointValues);
+    }
+
+    /**
+     * The whole announcement, including when it was made.
+     *
+     * <p>When matters for the validation spend, which may only be signed once it has been waiting
+     * as long as any other peg-out. Powpeg found that out by walking the chain for the receipt;
+     * the log that carries the values carries its own block number.
+     */
+    public synchronized Optional<Announcement> announcementFor(Sha256Hash btcTxHash, long chainHeight) {
+        Announcement cached = known.get(btcTxHash);
         if (cached != null) {
             return Optional.of(cached);
         }
@@ -83,18 +106,21 @@ public class PegoutOutpointValues {
         List<EthClient.LogEntry> found = events.findBackwards(chainHeight, maxLookback, topics);
         if (found.isEmpty()) {
             logger.warn(
-                "[valuesFor] The bridge announced no outpoint values for peg-out {} in the last {} blocks. "
+                "[announcementFor] The bridge announced no outpoint values for peg-out {} in the last {} blocks. "
                     + "Its segwit inputs cannot be signed until they are found.",
                 btcTxHash, maxLookback);
             return Optional.empty();
         }
 
-        byte[] encoded = (byte[]) BridgeEvents.PEGOUT_TRANSACTION_CREATED.getEvent()
-            .decodeEventData(found.get(0).data())[0];
-        List<Coin> values = UtxoUtils.decodeOutpointValues(encoded);
-        logger.debug("[valuesFor] Peg-out {} spends {} outpoints", btcTxHash, values.size());
-        known.put(btcTxHash, values);
-        return Optional.of(values);
+        EthClient.LogEntry log = found.get(0);
+        byte[] encoded =
+            (byte[]) BridgeEvents.PEGOUT_TRANSACTION_CREATED.getEvent().decodeEventData(log.data())[0];
+        Announcement announcement =
+            new Announcement(UtxoUtils.decodeOutpointValues(encoded), log.blockNumber());
+        logger.debug("[announcementFor] Peg-out {} spends {} outpoints, built in block {}",
+            btcTxHash, announcement.outpointValues().size(), announcement.blockNumber());
+        known.put(btcTxHash, announcement);
+        return Optional.of(announcement);
     }
 
     /** Used by tests and by logging; the cache is an optimisation, not state anything depends on. */

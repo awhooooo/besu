@@ -307,21 +307,40 @@ class BtcReleaseClientTest {
     }
 
     @Test
-    void aFederationThisSequencerIsNotInIsRefusedAtTheStart() throws Exception {
-        // Otherwise every signature is made with a key the redeem script does not name: the bridge
-        // rejects each one, and all that is left behind is gas.
+    void aFederationWhoseKeysThisSequencerDoesNotHoldIsWatchedButNotSignedFor() throws Exception {
+        // Keys are not reused across a federation change, so a member of a proposed federation
+        // belongs to nothing live until the change completes. The process has to run anyway. What
+        // it must not do is sign: the bridge would reject a key its redeem script does not name,
+        // once a turn, for as long as the peg-out waited.
         Federation somebodyElses = PegoutFixture.standardFederation(PegoutFixture.strangersKeys(3), btcParams);
+        BtcTransaction theirPegout = PegoutFixture.legacyPegout(somebodyElses, btcParams, 1, PER_INPUT);
+        bridgeIsWaitingOn(Hash.fromHexStringLenient("0xcc"), theirPegout);
 
-        assertThatThrownBy(() -> newClient().start(somebodyElses))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("is not one of federation");
+        BtcReleaseClient client = newClient();
+        client.start(somebodyElses);
+        client.signPegouts();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
     }
 
     @Test
-    void aFederationThisSequencerIsInIsAccepted() {
+    void holdingOneFederationsKeysDoesNotMeanSigningForAnother() throws Exception {
+        // Both watched, only one of them ours. The redeem script of the input decides.
         Federation ours = PegoutFixture.standardFederation(keys, btcParams);
+        Federation theirs = PegoutFixture.standardFederation(PegoutFixture.strangersKeys(3), btcParams);
+        TreeMap<Hash, BtcTransaction> waiting = new TreeMap<>();
+        waiting.put(Hash.fromHexStringLenient("0xf1"), PegoutFixture.legacyPegout(theirs, btcParams, 1, PER_INPUT));
+        waiting.put(Hash.fromHexStringLenient("0xf2"), PegoutFixture.legacyPegout(ours, btcParams, 1, PER_INPUT));
+        bridgeIsWaitingOn(waiting);
 
-        newClient().start(ours);
+        BtcReleaseClient client = newClient();
+        client.start(ours);
+        client.start(theirs);
+        client.signPegouts();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).hasSize(1);
+        FakeNode.Sent sent = node.firstOf(BridgeMethods.ADD_SIGNATURE).orElseThrow();
+        assertThat(Bytes.wrap((byte[]) sent.arguments()[2])).isEqualTo(Hash.fromHexStringLenient("0xf2").getBytes());
     }
 
     @Test
@@ -338,6 +357,142 @@ class BtcReleaseClientTest {
         client(federation).signPegouts();
 
         assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    @Test
+    void holdingTheBtcKeyButNotTheRskKeyIsNotMembership() throws Exception {
+        // What mismatched key files produce. The signature would be correct and the transaction
+        // carrying it refused before anyone read it, because the bridge checks the sender's
+        // address against the federation as well as the signing key.
+        Federation mismatched = PegoutFixture.federationWithOurBtcKeyButNotOurRskKey(btcParams);
+        BtcTransaction pegout = PegoutFixture.legacyPegout(mismatched, btcParams, 1, PER_INPUT);
+        bridgeIsWaitingOn(Hash.fromHexStringLenient("0x7a"), pegout);
+
+        BtcReleaseClient client = newClient();
+        client.start(mismatched);
+        client.signPegouts();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    // ---------------------------------------------------------------- the validation spend
+
+    @Test
+    void theValidationSpendIsSignedByTheProposedFederationsMembers() throws Exception {
+        // The half of the ceremony the incoming members do. They hold none of the active
+        // federation's keys, and this is the only thing they can sign.
+        Federation proposed = proposedFederation();
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x5b"), svpSpend);
+        bridgeAnnouncedValues(svpSpend, PegoutFixture.outpointValues(1, PER_INPUT), CHAIN_HEIGHT - 3_600);
+        bridgeIsWaitingOn(new TreeMap<>());
+
+        BtcReleaseClient client = newClient();
+        client.start(proposed);
+        client.signSvpSpendTransaction();
+
+        FakeNode.Sent sent = node.firstOf(BridgeMethods.ADD_SIGNATURE).orElseThrow();
+        Object[] signatures = (Object[]) sent.arguments()[1];
+        Sha256Hash expected = BitcoinUtils.generateSigHashForSegwitTransactionInput(svpSpend, 0, PER_INPUT);
+        assertThat(federatorKey().verify(expected, decode((byte[]) signatures[0]))).isTrue();
+        assertThat((byte[]) sent.arguments()[0]).isEqualTo(federatorKey().getPubKey());
+    }
+
+    @Test
+    void theValidationSpendIsNotSignedByTheOutgoingFederationsMembers() throws Exception {
+        // Their part was funding it. Keys are not reused across a change, so the proposal is
+        // built from keys this sequencer does not hold, and every signature it made would be one
+        // the bridge rejects.
+        Federation proposed = proposedFederationOfStrangers();
+        Federation ours = PegoutFixture.standardFederation(keys, btcParams);
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x5c"), svpSpend);
+        bridgeAnnouncedValues(svpSpend, PegoutFixture.outpointValues(1, PER_INPUT), CHAIN_HEIGHT - 3_600);
+
+        BtcReleaseClient client = newClient();
+        client.start(ours);
+        client.start(proposed);
+        client.signSvpSpendTransaction();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    @Test
+    void theValidationSpendWaitsAsLongAsAnyOtherPegout() throws Exception {
+        // Once signed it goes to bitcoin and cannot be recalled, which is the same reason every
+        // peg-out waits.
+        Federation proposed = proposedFederation();
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x5d"), svpSpend);
+        // Built two blocks ago; regtest wants three.
+        bridgeAnnouncedValues(svpSpend, PegoutFixture.outpointValues(1, PER_INPUT), CHAIN_HEIGHT - 2);
+
+        BtcReleaseClient client = newClient();
+        client.start(proposed);
+        client.signSvpSpendTransaction();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    @Test
+    void theValidationSpendIsSignedOnceItHasWaited() throws Exception {
+        Federation proposed = proposedFederation();
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x5e"), svpSpend);
+        bridgeAnnouncedValues(svpSpend, PegoutFixture.outpointValues(1, PER_INPUT), CHAIN_HEIGHT - 3);
+
+        BtcReleaseClient client = newClient();
+        client.start(proposed);
+        client.signSvpSpendTransaction();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).hasSize(1);
+    }
+
+    @Test
+    void aValidationSpendWithNoAnnouncementIsLeftAlone() throws Exception {
+        // Without it there is no telling how long it has waited, nor what its inputs were worth.
+        Federation proposed = proposedFederation();
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x5f"), svpSpend);
+
+        BtcReleaseClient client = newClient();
+        client.start(proposed);
+        client.signSvpSpendTransaction();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    @Test
+    void thereIsUsuallyNoValidationSpendAtAll() throws Exception {
+        Federation ours = PegoutFixture.standardFederation(keys, btcParams);
+        node.answering(BridgeMethods.GET_STATE_FOR_SVP_CLIENT, new byte[0]);
+
+        BtcReleaseClient client = newClient();
+        client.start(ours);
+        client.signSvpSpendTransaction();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).isEmpty();
+    }
+
+    @Test
+    void theValidationSpendIsSignedBeforeThePegouts() throws Exception {
+        // A proposed federation is waiting on it to become a federation at all.
+        Federation proposed = proposedFederation();
+        Federation ours = PegoutFixture.standardFederation(keys, btcParams);
+        BtcTransaction svpSpend = PegoutFixture.segwitPegout(proposed, btcParams, 1, PER_INPUT);
+        svpIsWaitingOn(Hash.fromHexStringLenient("0x60"), svpSpend);
+        bridgeAnnouncedValues(svpSpend, PegoutFixture.outpointValues(1, PER_INPUT), CHAIN_HEIGHT - 3_600);
+        bridgeIsWaitingOn(Hash.fromHexStringLenient("0x61"),
+            PegoutFixture.legacyPegout(ours, btcParams, 1, PER_INPUT));
+
+        BtcReleaseClient client = newClient();
+        client.start(ours);
+        client.start(proposed);
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.ADD_SIGNATURE)).hasSize(2);
+        assertThat(Bytes.wrap((byte[]) node.sentOf(BridgeMethods.ADD_SIGNATURE).get(0).arguments()[2]))
+            .isEqualTo(Hash.fromHexStringLenient("0x60").getBytes());
     }
 
     // ---------------------------------------------------------------- broadcasting
@@ -422,6 +577,28 @@ class BtcReleaseClientTest {
             events,
             new PegoutSignedCacheImpl(Duration.ofMinutes(30), Clock.systemUTC()),
             4_500);
+    }
+
+    /**
+     * A proposed federation this sequencer belongs to: it holds an incoming member's keys.
+     *
+     * <p>Always P2SH-P2WSH, since that is the only kind a vote can create.
+     */
+    private Federation proposedFederation() {
+        return PegoutFixture.segwitFederation(
+            PegoutFixture.federationKeys(3), btcParams, bridgeConstants.getFederationConstants());
+    }
+
+    /** A proposed federation built from keys nobody here holds, as an outgoing member would see. */
+    private Federation proposedFederationOfStrangers() {
+        return PegoutFixture.segwitFederation(
+            PegoutFixture.strangersKeys(3), btcParams, bridgeConstants.getFederationConstants());
+    }
+
+    private void svpIsWaitingOn(Hash creationRskTxHash, BtcTransaction svpSpend) {
+        node.answering(BridgeMethods.GET_STATE_FOR_SVP_CLIENT,
+            new co.rsk.peg.StateForProposedFederator(
+                java.util.Map.entry(creationRskTxHash, svpSpend)).encodeToRlp());
     }
 
     private void bridgeIsWaitingOn(Hash creationRskTxHash, BtcTransaction pegout) {

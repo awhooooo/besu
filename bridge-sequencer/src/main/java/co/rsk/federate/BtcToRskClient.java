@@ -20,11 +20,13 @@ package co.rsk.federate;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import co.rsk.bitcoinj.core.BtcTransaction;
 import co.rsk.bitcoinj.core.ScriptException;
@@ -86,7 +88,18 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
     private final int minimumConfirmationsOnRsk;
 
     private BtcToRskClientFileData fileData = new BtcToRskClientFileData();
+    /** The federation this client acts as a member of, which decides what it may call. */
     private Federation federation;
+    /**
+     * Every federation whose coins this client will relay transactions for.
+     *
+     * <p>Usually just the one above. During a federation change the same client is also asked to
+     * watch the proposed federation, because the transaction that funds the validation is paid to
+     * that address and to its flyover address and to nothing else. Deciding whether to relay by
+     * asking only about {@link #federation} would drop it, and dropping it stalls the change: the
+     * bridge only learns the funding confirmed when somebody registers it.
+     */
+    private final Set<Federation> recognisedFederations = new LinkedHashSet<>();
 
     public BtcToRskClient(
         BitcoinWrapper bitcoinWrapper,
@@ -115,9 +128,22 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
     /** Begins watching, for a federation this federator belongs to. */
     public void start(Federation federation) {
         this.federation = Objects.requireNonNull(federation, "federation");
+        recognisedFederations.add(federation);
         logger.info("[start] Watching federation {}", federation.getAddress());
         bitcoinWrapper.addBlockListener(this);
         bitcoinWrapper.addFederationListener(federation, this);
+    }
+
+    /**
+     * Also relay transactions paying this federation, without acting as one of its members.
+     *
+     * <p>For the proposed federation during a change: its funding transaction pays nobody else,
+     * and registering it is open to anyone.
+     */
+    public void alsoRelayFor(Federation other) {
+        if (recognisedFederations.add(Objects.requireNonNull(other, "other"))) {
+            logger.info("[alsoRelayFor] Will also relay transactions paying {}", other.getAddress());
+        }
     }
 
     public void stop() {
@@ -126,6 +152,7 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
             bitcoinWrapper.removeFederationListener(federation, this);
             federation = null;
         }
+        recognisedFederations.clear();
         bitcoinWrapper.removeBlockListener(this);
     }
 
@@ -142,11 +169,18 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
 
         logger.debug("[updateBridge] Federation {}", federation.getAddress());
 
-        try {
-            int sent = updateBridgeBtcBlockchain();
-            logger.debug("[updateBridge] Sent {} headers", sent);
-        } catch (Exception e) {
-            logger.error("[updateBridge] Informing headers failed: {}", e.getMessage(), e);
+        // Two of the four are reserved to federation members and two are open to anyone. A
+        // sequencer that is not a member can still do the open ones, and they are the ones that
+        // move somebody's coins.
+        boolean member = isFederationMember();
+
+        if (member) {
+            try {
+                int sent = updateBridgeBtcBlockchain();
+                logger.debug("[updateBridge] Sent {} headers", sent);
+            } catch (Exception e) {
+                logger.error("[updateBridge] Informing headers failed: {}", e.getMessage(), e);
+            }
         }
 
         try {
@@ -161,11 +195,39 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
             logger.error("[updateBridge] Registering transactions failed: {}", e.getMessage(), e);
         }
 
-        try {
-            federatorSupport.sendUpdateCollections();
-        } catch (Exception e) {
-            logger.error("[updateBridge] updateCollections failed: {}", e.getMessage(), e);
+        if (member) {
+            try {
+                federatorSupport.sendUpdateCollections();
+            } catch (Exception e) {
+                logger.error("[updateBridge] updateCollections failed: {}", e.getMessage(), e);
+            }
         }
+    }
+
+    /**
+     * Whether this sequencer may make the calls the bridge reserves for its federation.
+     *
+     * <p>receiveHeaders and updateCollections are reserved; registerBtcTransaction and
+     * registerBtcCoinbaseTransaction are open to anyone, because a peg-in is somebody's coins and
+     * the bridge checks the proof rather than who carried it. So a sequencer holding keys that
+     * are in no live federation is still useful: it relays peg-ins, and skips the two calls that
+     * would revert.
+     *
+     * <p>That is the state an incoming federation's member is in until their change completes,
+     * and running before then is how they are ready when it does. The bridge decides membership
+     * from the sending address, not from anything inside the call.
+     */
+    private boolean isFederationMember() {
+        byte[] senderAddress = federatorSupport.senderAddress().getBytes().toArrayUnsafe();
+        if (federation.hasMemberWithRskAddress(senderAddress)) {
+            return true;
+        }
+        logger.warn(
+            "[isFederationMember] This sequencer sends from {}, which is not a member of federation {}. "
+                + "Relaying peg-ins, but leaving headers and updateCollections to the members, whose "
+                + "calls the bridge will accept.",
+            federatorSupport.senderAddress(), federation.getAddress());
+        return false;
     }
 
     /** A transaction paying the federation: remember it, so its proof gets built when a block lands. */
@@ -401,7 +463,8 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
 
         co.rsk.bitcoinj.core.Context thinContext =
             co.rsk.bitcoinj.core.Context.getOrCreate(bridgeConstants.getBtcParams());
-        Wallet federationWallet = BridgeUtils.getFederationNoSpendWallet(thinContext, federation);
+        Wallet federationWallet =
+            BridgeUtils.getFederationsNoSpendWallet(thinContext, List.copyOf(recognisedFederations));
 
         int sent = 0;
         Iterator<Sha256Hash> pending = List.copyOf(fileData.getTransactionProofs().keySet()).iterator();
@@ -418,8 +481,8 @@ public class BtcToRskClient implements BlockListener, TransactionListener {
 
                 BtcTransaction btcTx = ThinConverter.toThin(bridgeConstants.getBtcParams(), tx);
                 if (btcTx.getValueSentToMe(federationWallet).isZero()) {
-                    logger.warn("[updateBridgeBtcTransactions] {} pays nothing to federation {}; dropping it",
-                        tx.getTxId(), federation.getAddress());
+                    logger.warn("[updateBridgeBtcTransactions] {} pays nothing to any federation this client "
+                            + "relays for; dropping it", tx.getTxId());
                     changed |= forget(wtxid);
                     continue;
                 }

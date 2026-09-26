@@ -667,6 +667,125 @@ class BtcToRskClientTest {
         assertThat(bitcoin.hasBlockListeners()).isFalse();
     }
 
+    @Test
+    void aSequencerThatIsNotAMemberStillRelaysPegins() throws Exception {
+        // registerBtcTransaction is open to anyone: a peg-in is somebody's coins, and the bridge
+        // checks the proof rather than who carried it. So a sequencer holding keys that are in no
+        // live federation still does the work that matters.
+        Federation strangers =
+            co.rsk.federate.testing.PegoutFixture.federationOfStrangers(bridgeConstants.getBtcParams());
+        org.bitcoinj.core.Address strangersAddress = org.bitcoinj.core.LegacyAddress.fromBase58(
+            REGTEST, strangers.getAddress().toBase58());
+        Transaction payment = BitcoinFixture.payTo(strangersAddress, Coin.COIN, 1);
+        Block withPegin = BitcoinFixture.block(
+            genesis.getHash(), List.of(BitcoinFixture.coinbase(1), payment));
+        bitcoin.appendToBestChain(withPegin);
+        bitcoin.confirm(payment);
+
+        BtcToRskClient client = client();
+        client.start(strangers);
+        client.onTransaction(payment);
+        client.onBlock(withPegin);
+        bridgeSeesBitcoinChain(1);
+        peginNotYetProcessed();
+
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.REGISTER_BTC_TRANSACTION)).hasSize(1);
+    }
+
+    @Test
+    void aSequencerThatIsNotAMemberLeavesTheReservedCallsAlone() throws Exception {
+        // receiveHeaders and updateCollections are the federation's, decided by the sending
+        // address. Sending them anyway would revert both, once a turn, indefinitely.
+        BtcToRskClient client = client();
+        client.start(co.rsk.federate.testing.PegoutFixture.federationOfStrangers(bridgeConstants.getBtcParams()));
+        buildChain(3);
+        bridgeSeesBitcoinChain(0);
+        peginNotYetProcessed();
+
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.RECEIVE_HEADERS)).isEmpty();
+        assertThat(node.sentOf(BridgeMethods.UPDATE_COLLECTIONS)).isEmpty();
+    }
+
+    @Test
+    void aMemberDoesTheReservedCallsToo() throws Exception {
+        buildChain(3);
+        BtcToRskClient client = startedClient();
+        bridgeSeesBitcoinChain(0);
+        peginNotYetProcessed();
+
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.RECEIVE_HEADERS)).hasSize(1);
+        assertThat(node.sentOf(BridgeMethods.UPDATE_COLLECTIONS)).hasSize(1);
+    }
+
+    @Test
+    void aSequencerThatIsNotAMemberStillGathersProofs() throws Exception {
+        // Watching bitcoin is not privileged, and an incoming federation's member has to be
+        // running before their change completes in order to be useful when it does.
+        Transaction payment = BitcoinFixture.payTo(federationAddress, Coin.COIN, 1);
+        Block withPegin = blockWith(payment);
+
+        BtcToRskClient client = client();
+        client.start(co.rsk.federate.testing.PegoutFixture.federationOfStrangers(bridgeConstants.getBtcParams()));
+        client.onTransaction(payment);
+        client.onBlock(withPegin);
+
+        assertThat(client.getTransactionsToSendToRsk().get(payment.getWTxId())).hasSize(1);
+    }
+
+    @Test
+    void aTransactionPayingOnlyAnotherRecognisedFederationIsStillRelayed() throws Exception {
+        // The transaction that funds a federation change pays the proposed federation and its
+        // flyover address and nothing else. Asking only whether it pays the federation this client
+        // acts as would drop it, and dropping it stalls the change: the bridge learns the funding
+        // confirmed only when somebody registers it, which anybody may do.
+        Federation proposed = co.rsk.federate.testing.PegoutFixture.segwitFederation(
+            co.rsk.federate.testing.PegoutFixture.strangersKeys(3),
+            bridgeConstants.getBtcParams(), bridgeConstants.getFederationConstants());
+        org.bitcoinj.core.Address proposedAddress = org.bitcoinj.core.LegacyAddress.fromBase58(
+            REGTEST, proposed.getAddress().toBase58());
+        Transaction fundTx = BitcoinFixture.payTo(proposedAddress, Coin.COIN.multiply(2), 1);
+        Block withFundTx = BitcoinFixture.block(
+            genesis.getHash(), List.of(BitcoinFixture.coinbase(1), fundTx));
+        bitcoin.appendToBestChain(withFundTx);
+        bitcoin.confirm(fundTx);
+
+        BtcToRskClient client = startedClient();
+        client.alsoRelayFor(proposed);
+        client.onTransaction(fundTx);
+        client.onBlock(withFundTx);
+        bridgeSeesBitcoinChain(1);
+        peginNotYetProcessed();
+
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.REGISTER_BTC_TRANSACTION)).hasSize(1);
+    }
+
+    @Test
+    void aTransactionPayingNoRecognisedFederationIsStillDropped() throws Exception {
+        Transaction elsewhere = BitcoinFixture.payTo(BitcoinFixture.someP2shAddress(13), Coin.COIN, 9);
+        Block block = blockWith(elsewhere);
+        bitcoin.appendToBestChain(block);
+        bitcoin.confirm(elsewhere);
+
+        BtcToRskClient client = startedClient();
+        client.onTransaction(elsewhere);
+        client.onBlock(block);
+        bridgeSeesBitcoinChain(1);
+        peginNotYetProcessed();
+
+        client.updateBridge();
+
+        assertThat(node.sentOf(BridgeMethods.REGISTER_BTC_TRANSACTION)).isEmpty();
+        assertThat(client.getTransactionsToSendToRsk()).isEmpty();
+    }
+
     // ---------------------------------------------------------------- restarting
 
     @Test
@@ -789,11 +908,25 @@ class BtcToRskClientTest {
         return ((co.rsk.federate.io.BtcToRskClientFileData) field.get(client)).getCoinbaseInformationMap();
     }
 
+    /**
+     * A federation this sequencer belongs to.
+     *
+     * <p>One member's RSK key is the one the sequencer signs transactions with, because that is
+     * how the bridge decides whether to accept them at all: receiveHeaders,
+     * registerBtcTransaction and updateCollections compare the sending address against each
+     * member's. A federation of unrelated keys would let these tests pass while the real bridge
+     * rejected every call.
+     */
     private Federation aFederation() {
-        List<FederationMember> members = FederationMember.getFederationMembersFromKeys(List.of(
-            co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(101)),
-            co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(102)),
-            co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(103))));
+        co.rsk.bitcoinj.core.BtcECKey ourRskKey =
+            co.rsk.bitcoinj.core.BtcECKey.fromPrivate(org.apache.tuweni.bytes.Bytes.fromHexString(RSK_KEY).toArray());
+        List<FederationMember> members = List.of(
+            new FederationMember(
+                co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(101)), ourRskKey, ourRskKey),
+            FederationMember.getFederationMemberFromKey(
+                co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(102))),
+            FederationMember.getFederationMemberFromKey(
+                co.rsk.bitcoinj.core.BtcECKey.fromPrivate(BigInteger.valueOf(103))));
         return FederationFactory.buildStandardMultiSigFederation(new FederationArgs(
             members, java.time.Instant.ofEpochSecond(1_700_000_000L), 1L, bridgeConstants.getBtcParams()));
     }

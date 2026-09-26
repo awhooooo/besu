@@ -20,6 +20,7 @@ package co.rsk.federate;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import co.rsk.bitcoinj.core.BtcECKey;
 import co.rsk.bitcoinj.core.NetworkParameters;
@@ -27,6 +28,8 @@ import co.rsk.federate.rpc.EthClient;
 import co.rsk.federate.signing.SignerException;
 import co.rsk.peg.BridgeMethods;
 import co.rsk.peg.StateForFederator;
+import co.rsk.peg.StateForProposedFederator;
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.PartialMerkleTree;
@@ -150,6 +153,20 @@ public class FederatorSupport {
     }
 
     /**
+     * The validation spend transaction, if a proposed federation is waiting to prove itself.
+     *
+     * <p>Kept apart from the peg-outs because it is signed by a different federation: the proposed
+     * one, whose members are proving they can move coins before the peg is handed to them.
+     */
+    public Optional<StateForProposedFederator> getStateForProposedFederator() {
+        byte[] encoded = bridge.callOne(BridgeMethods.GET_STATE_FOR_SVP_CLIENT);
+        if (encoded == null || encoded.length == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new StateForProposedFederator(encoded, btcParams));
+    }
+
+    /**
      * Gives the bridge this federator's signatures, one per input, in input order.
      *
      * @param federatorPublicKey the BTC key they were made with, so the bridge knows whose they are
@@ -164,6 +181,11 @@ public class FederatorSupport {
             federatorPublicKey.getPubKey(),
             signatures.toArray(new Object[0]),
             rskTxHash.getBytes().toArrayUnsafe());
+    }
+
+    /** The address this sequencer's transactions come from, which the bridge checks against the federation. */
+    public Address senderAddress() {
+        return bridge.senderAddress();
     }
 
     /** The height of the Besu chain the node is following. */
