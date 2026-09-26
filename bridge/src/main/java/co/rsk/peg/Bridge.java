@@ -255,17 +255,9 @@ public class Bridge {
         }
     }
 
-    public boolean receiveHeadersIsPublic() {
-        return false;
-    }
-
     /*
      * We do not open receiveHeader bridge operation due to security reasons
      */
-    public boolean receiveHeaderIsPublic() {
-        return false; 
-    }
-
     public long receiveHeadersGetCost(Object[] args) {
         final long BASE_COST = 25_000L;
         if (args == null) {
@@ -314,10 +306,6 @@ public class Bridge {
             logger.warn("Exception adding header", e);
             throw new VMException("Exception adding header", e);
         }
-    }
-
-    public boolean registerBtcTransactionIsPublic() {
-        return true;
     }
 
     public int receiveHeader(Object[] args) throws VMException {
@@ -1062,20 +1050,6 @@ public class Bridge {
             }
 
             return decoratee.execute(self, args);
-        };
-    }
-
-    public static BridgeMethods.BridgeMethodExecutor executeIfElse(
-            BridgeMethods.BridgeCondition condition,
-            BridgeMethods.BridgeMethodExecutor ifTrue,
-            BridgeMethods.BridgeMethodExecutor ifFalse) {
-
-        return (self, args) -> {
-            if (condition.isTrue(self)) {
-                return ifTrue.execute(self, args);
-            } else {
-                return ifFalse.execute(self, args);
-            }
         };
     }
 

@@ -466,11 +466,7 @@ public enum BridgeMethods {
             new String[]{}
         ),
         fromMethod(Bridge::receiveHeadersGetCost),
-        Bridge.executeIfElse(
-                Bridge::receiveHeadersIsPublic,
-                (BridgeMethodExecutorVoid) Bridge::receiveHeaders,
-                Bridge.activeAndRetiringFederationOnly((BridgeMethodExecutorVoid) Bridge::receiveHeaders, "receiveHeaders")
-        ),
+        Bridge.activeAndRetiringFederationOnly((BridgeMethodExecutorVoid) Bridge::receiveHeaders, "receiveHeaders"),
         fixedPermission(false)
     ),
     RECEIVE_HEADER(
@@ -480,11 +476,7 @@ public enum BridgeMethods {
                 new String[]{"int256"}
         ),
         fixedCost(10_600L),
-        Bridge.executeIfElse(
-                Bridge::receiveHeaderIsPublic,
-                (BridgeMethodExecutorTyped<Integer>) Bridge::receiveHeader,
-                Bridge.activeAndRetiringFederationOnly((BridgeMethodExecutorTyped<Integer>) Bridge::receiveHeader, "receiveHeader")
-        ),
+        Bridge.activeAndRetiringFederationOnly((BridgeMethodExecutorTyped<Integer>) Bridge::receiveHeader, "receiveHeader"),
         fixedPermission(false)
     ),
     REGISTER_BTC_TRANSACTION(
@@ -494,11 +486,7 @@ public enum BridgeMethods {
                 new String[]{}
         ),
         fixedCost(22000L),
-        Bridge.executeIfElse(
-            Bridge::registerBtcTransactionIsPublic,
-            (BridgeMethodExecutorVoid) Bridge::registerBtcTransaction,
-            Bridge.activeAndRetiringFederationOnly((BridgeMethodExecutorVoid) Bridge::registerBtcTransaction, "registerBtcTransaction")
-        ),
+        (BridgeMethodExecutorVoid) Bridge::registerBtcTransaction,
         fixedPermission(false)
     ),
     RELEASE_BTC(
@@ -705,9 +693,6 @@ public enum BridgeMethods {
         return callTypeVerifier.test(callType);
     }
 
-    public interface BridgeCondition {
-        boolean isTrue(Bridge bridge);
-    }
 
     /**
      * Interface for executing methods in the Bridge context.
