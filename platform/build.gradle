@@ -97,6 +97,7 @@ dependencies {
 
     api 'com.google.guava:guava:33.5.0-jre'
 
+    api 'com.typesafe:config:1.4.2'
     api 'org.checkerframework:checker-qual:3.43.0'
 
     api 'com.google.errorprone:error_prone_annotations:2.41.0'

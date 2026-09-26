@@ -1,0 +1,78 @@
+/*
+ * The bridge sequencer: the process a federation member runs to drive the peg.
+ *
+ * It is not part of the node. Nothing in Besu depends on this module; it depends on the bridge for
+ * the peg's ABI and constants, and talks to a node over JSON-RPC like any other client would.
+ *
+ * Sources under src/main/java are derived from RSK's powpeg-node (co.rsk.federate) and are licensed
+ * under the GNU Lesser General Public License v3.0, not the Apache License that covers the rest of
+ * this repository. They keep their original package names so that future changes upstream can be
+ * ported by diff.
+ */
+
+apply plugin: 'java-library'
+
+jar {
+  archiveBaseName = calculateArtifactId(project)
+  manifest {
+    attributes(
+      'Specification-Title': archiveBaseName,
+      'Specification-Version': project.version,
+      'Implementation-Title': archiveBaseName,
+      'Implementation-Version': calculateVersion(),
+      'Commit-Hash': getGitCommitDetails(40).hash,
+      'Automatic-Module-Name': 'bmb.bridge.sequencer'
+      )
+  }
+}
+
+dependencies {
+  api 'org.slf4j:slf4j-api'
+
+  implementation project(':bridge')
+  implementation project(':datatypes')
+  implementation project(':ethereum:rlp')
+  implementation project(':crypto:algorithms')
+
+  implementation 'io.consensys.tuweni:tuweni-bytes'
+  implementation 'io.consensys.tuweni:tuweni-units'
+  implementation('co.rsk.bitcoinj:bitcoinj-thin:0.14.4-bmb-new-rsk-18') {
+    // Maven enforcer rule artifact declared as a compile dependency upstream; not needed here.
+    exclude group: 'uk.co.froot.maven.enforcer'
+    // bitcoinj's HTTP and wallet-encryption dependencies: the thin fork references none of them.
+    exclude group: 'com.squareup.okhttp'
+    exclude group: 'com.squareup.okio'
+    exclude group: 'com.lambdaworks'
+  }
+  implementation 'com.typesafe:config'
+  implementation 'com.fasterxml.jackson.core:jackson-databind'
+  implementation 'org.apache.commons:commons-lang3'
+  implementation 'org.bouncycastle:bcprov-jdk18on'
+
+  // Only the tests link Besu's own transaction decoder, to check that what this module signs is
+  // what a node would accept. Production never depends on it.
+  testImplementation project(':ethereum:core')
+  // Transaction implements a plugin-api interface, so its decoder needs that on the classpath.
+  testImplementation project(':plugin-api')
+  testImplementation 'org.assertj:assertj-core'
+  testImplementation 'org.junit.jupiter:junit-jupiter'
+  testImplementation 'org.mockito:mockito-core'
+  testImplementation 'org.mockito:mockito-junit-jupiter'
+}
+
+// Derived from powpeg-node and kept close to upstream for diffability: no reformatting, no header
+// rewriting, and no lint or errorprone gating.
+tasks.withType(JavaCompile).configureEach {
+  options.compilerArgs.remove('-Werror')
+  options.errorprone.enabled = false
+}
+
+spotless {
+  java {
+    targetExclude 'src/**/*.java'
+  }
+}
+
+javadoc {
+  enabled = false
+}
